@@ -1,0 +1,23 @@
+{
+    "python.testing.unittestArgs": [
+        "-v",
+        "-s",
+        "./src",
+        "-p",
+        "*test.py"
+    ],
+    "python.testing.pytestEnabled": false,
+    "python.testing.unittestEnabled": true
+    ,
+    "python.defaultInterpreterPath": "C:\\Program Files\\Python310\\python.exe",
+    "python.pythonPath": "C:\\Program Files\\Python310\\python.exe",
+    "python.analysis.extraPaths": [
+        "C:\\Users\\skipp\\AppData\\Roaming\\Python\\Python310\\site-packages"
+    ],
+    "python.analysis.useLibraryCodeForTypes": true,
+    "python.analysis.packageIndexDepth": 3,
+    "cursorpyright.analysis.extraPaths": [
+        "C:\\Users\\skipp\\AppData\\Roaming\\Python\\Python310\\site-packages"
+    ],
+    "cursorpyright.analysis.useLibraryCodeForTypes": true
+}

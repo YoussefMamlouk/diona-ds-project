@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "individual-project-dionavdj"
+version = "0.1.0"
+description = "Stock forecasting and risk-analysis demo project"
+requires-python = ">=3.8"
+readme = "README.md"
+authors = [ { name = "Dionavdj" } ]
+
+[project.scripts]
+forecast = "src.main:main"
