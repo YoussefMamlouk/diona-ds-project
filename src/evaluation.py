@@ -7,14 +7,119 @@ This module coordinates the forecasting pipeline by:
 - Generating forecasts with uncertainty quantification via Monte Carlo
 - Adapting to long vs short horizon characteristics
 """
-from .lib.model_utils import run_backtest
 from .models import forecast_from_arima, forecast_with_xgb
 import numpy as np
 import pandas as pd
-from typing import Dict, Optional
-from .plotting import plot_forecast_save
-from pmdarima import auto_arima
+from typing import Dict, Optional, Tuple
+import matplotlib.pyplot as plt
+import os
+from datetime import datetime
 from statsmodels.tsa.arima.model import ARIMA
+from sklearn.metrics import mean_absolute_percentage_error
+from pmdarima import auto_arima
+
+
+def run_backtest(
+    log_returns: pd.Series,
+    exog_df: pd.DataFrame,
+    forecast_periods: int,
+    model_type: str,
+    prices: pd.Series,
+) -> Tuple[str, Optional[float], str]:
+    """Run backtests on multiple models and return best performer.
+    
+    Args:
+        log_returns: Log returns series
+        exog_df: Exogenous features DataFrame
+        forecast_periods: Number of periods to forecast
+        model_type: Type of model ('arima_fixed' or 'auto_arima')
+        prices: Price series for computing actual values
+    
+    Returns:
+        Tuple of (best_model_name, best_mape, signal_quality)
+    """
+    if len(log_returns) < forecast_periods * 2 + 10:
+        return "arima", None, "unknown"
+    
+    # Split into train/test
+    train_size = len(log_returns) - forecast_periods
+    train_returns = log_returns.iloc[:train_size]
+    test_returns = log_returns.iloc[train_size:]
+    
+    has_exog = not exog_df.empty and exog_df.shape[1] > 0
+    train_exog = exog_df.iloc[:train_size] if has_exog else None
+    test_exog = exog_df.iloc[train_size:] if has_exog else None
+    
+    results = {}
+    
+    # Test ARIMA - convert to price level for MAPE calculation
+    try:
+        if has_exog and train_exog is not None:
+            arima_model = ARIMA(train_returns, order=(1, 0, 0), exog=train_exog).fit()
+            forecast_returns = arima_model.forecast(steps=forecast_periods, exog=test_exog).values
+        else:
+            arima_model = ARIMA(train_returns, order=(1, 0, 0)).fit()
+            forecast_returns = arima_model.forecast(steps=forecast_periods).values
+        
+        # Convert log returns to prices for MAPE calculation
+        last_price = prices.iloc[train_size - 1]
+        forecast_prices = last_price * np.exp(np.cumsum(forecast_returns))
+        actual_prices = prices.iloc[train_size:train_size + forecast_periods].values
+        
+        mape = float(mean_absolute_percentage_error(actual_prices, forecast_prices) * 100)
+        results["arima"] = mape
+    except Exception:
+        pass
+    
+    # Test simple drift model (mean return) - convert to price level
+    try:
+        drift = float(train_returns.mean())
+        forecast_returns = np.full(forecast_periods, drift)
+        
+        # Convert to prices
+        last_price = prices.iloc[train_size - 1]
+        forecast_prices = last_price * np.exp(np.cumsum(forecast_returns))
+        actual_prices = prices.iloc[train_size:train_size + forecast_periods].values
+        
+        mape = float(mean_absolute_percentage_error(actual_prices, forecast_prices) * 100)
+        results["drift"] = mape
+    except Exception:
+        pass
+    
+    # Test XGBoost if available - convert to price level
+    try:
+        from .models import forecast_with_xgb, train_xgb_cv
+        
+        xgb_model = train_xgb_cv(train_returns, train_exog)
+        if xgb_model is not None:
+            forecast_returns = forecast_with_xgb(train_returns, train_exog, forecast_periods, model=xgb_model)
+            if forecast_returns is not None:
+                # Convert to prices
+                last_price = prices.iloc[train_size - 1]
+                forecast_prices = last_price * np.exp(np.cumsum(forecast_returns))
+                actual_prices = prices.iloc[train_size:train_size + forecast_periods].values
+                
+                mape = float(mean_absolute_percentage_error(actual_prices, forecast_prices) * 100)
+                results["xgb"] = mape
+    except Exception:
+        pass
+    
+    if not results:
+        return "arima", None, "unknown"
+    
+    # Find best model
+    best_model = min(results, key=results.get)
+    best_mape = results[best_model]
+    
+    # Determine signal quality
+    if best_mape < 5:
+        signal_quality = "high"
+    elif best_mape < 15:
+        signal_quality = "medium"
+    else:
+        signal_quality = "low"
+    
+    return best_model, best_mape, signal_quality
 
 
 def evaluate_backtest(log_returns, exog_df, forecast_periods, model_type, prices):
@@ -229,8 +334,74 @@ def generate_forecast(
 
 
 def plot_forecast(ticker: str, prices: pd.Series, raw_prices: pd.Series, forecast_artifacts: Dict[str, object], save: bool = False) -> Optional[str]:
-    """Delegate plotting to `src.plotting.plot_forecast_save` which can save the figure.
+    """Plot the forecast and optionally save to `results/`.
 
-    Returns the saved file path if `save=True`, else None.
+    Returns the path to the saved image if `save=True`, otherwise None.
     """
-    return plot_forecast_save(ticker, prices, raw_prices, forecast_artifacts, save=save)
+    forecast_series = forecast_artifacts["forecast_series"]
+    hybrid_upper = forecast_artifacts["hybrid_upper"]
+    hybrid_lower = forecast_artifacts["hybrid_lower"]
+    mc_p10 = forecast_artifacts["mc_p10"]
+    mc_p50 = forecast_artifacts["mc_p50"]
+    mc_p90 = forecast_artifacts["mc_p90"]
+
+    plt.figure(figsize=(10, 5))
+    try:
+        if raw_prices is not None and len(raw_prices) > len(prices):
+            plt.plot(raw_prices.index, raw_prices, label="Historical Prices (raw)", color="tab:gray", alpha=0.4)
+    except Exception:
+        pass
+    plt.plot(prices.index, prices, label="Historical Prices")
+    
+    # Connect last historical point to forecast for better visualization
+    last_price = prices.iloc[-1]
+    last_date = prices.index[-1]
+    extended_dates = [last_date] + list(forecast_series.index)
+    extended_forecast = [last_price] + list(forecast_series.values)
+    
+    plt.plot(extended_dates, extended_forecast, label=f"Forecasted Prices", color="red", marker='o', markersize=5)
+    plt.title(f"{ticker} Price Forecast")
+    plt.xlabel("Date")
+    plt.ylabel("Price")
+    
+    # Extend confidence bounds to connect with last price
+    extended_upper = [last_price] + list(hybrid_upper.values)
+    extended_lower = [last_price] + list(hybrid_lower.values)
+    
+    plt.fill_between(
+        extended_dates,
+        extended_lower,
+        extended_upper,
+        color="gray",
+        alpha=0.3,
+        label="95% Confidence Interval",
+    )
+    plt.plot(extended_dates, extended_upper, linestyle="--", color="orange", label="Upper Confidence Bound")
+    plt.plot(extended_dates, extended_lower, linestyle="--", color="green", label="Lower Confidence Bound")
+    
+    # Extend MC bands
+    extended_mc_p10 = [last_price] + list(mc_p10.values)
+    extended_mc_p90 = [last_price] + list(mc_p90.values)
+    extended_mc_p50 = [last_price] + list(mc_p50.values)
+    
+    plt.fill_between(extended_dates, extended_mc_p10, extended_mc_p90, color="orange", alpha=0.2, label="MC 10-90%")
+    plt.plot(extended_dates, extended_mc_p50, color="orange", linestyle=":", label="MC Median", marker='x')
+    plt.legend()
+    plt.grid()
+    # Add a horizon uncertainty warning for long horizons
+    try:
+        if len(forecast_series) > 30:
+            plt.gcf().text(0.02, 0.95, "Warning: longer horizons have larger uncertainty; interpret probabilistically.", fontsize=9, color="red")
+    except Exception:
+        pass
+
+    saved_path = None
+    if save:
+        results_dir = os.path.join(os.getcwd(), "results")
+        os.makedirs(results_dir, exist_ok=True)
+        timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        filename = f"forecast_{ticker}_{timestamp}.png"
+        saved_path = os.path.join(results_dir, filename)
+        plt.savefig(saved_path, bbox_inches="tight")
+    plt.show()
+    return saved_path

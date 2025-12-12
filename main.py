@@ -11,12 +11,10 @@ import argparse
 import pathlib
 
 # Use package-relative imports. Run the package with `python -m src` or use the
-# top-level `run.py` launcher. Relative imports are the recommended, idiomatic
+# top-level `main.py` launcher. Relative imports are the recommended, idiomatic
 # approach for packages and avoid `sys.path` manipulation.
 from src.data_loader import compute_horizon_settings, load_series_for_horizon
 from src.evaluation import generate_forecast, plot_forecast
-from src.lib.fetchers import fetch_yfinance
-from src.news_api import fetch_news_for_ticker
 
 warnings.filterwarnings("ignore")
 try:
@@ -30,6 +28,26 @@ except AssertionError:
     pass
 except Exception as e:
     warnings.warn(f"Could not set yfinance tz cache location: {e}")
+
+
+def fetch_news_for_ticker(ticker: str, api_key):
+    """Fetch recent news articles for `ticker` using NewsAPI.org.
+
+    Returns a list of article dicts (may be empty). Caller should handle
+    network errors gracefully.
+    """
+    if not api_key:
+        return []
+    try:
+        import requests
+        url = f"https://newsapi.org/v2/everything?q={ticker}&apiKey={api_key}"
+        resp = requests.get(url, timeout=10)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        return data.get("articles", [])
+    except Exception:
+        return []
 
 
 def prompt_ticker() -> str:
@@ -190,7 +208,7 @@ def main():
         current_price = float(prices.iloc[-1])
         print(f"Current price of {ticker}: ${current_price:.2f} (fallback from downloaded data)")
 
-    # News (delegated to `src.news_api`)
+    # News (delegated to local function)
     articles = fetch_news_for_ticker(ticker, api_key)
     if not api_key or api_key.strip() == "":
         print("\n News feature disabled (no API key provided).\n")
@@ -210,3 +228,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

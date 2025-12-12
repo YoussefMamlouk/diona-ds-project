@@ -4,11 +4,78 @@ Data loading helpers.
 import numpy as np
 import math
 import pandas as pd
+import yfinance as yf
 from typing import Dict, Optional
 
-# Use existing fetcher and feature builder from src.lib
-from .lib.fetchers import fetch_yfinance
-from .lib.data_utils import build_exog
+
+def fetch_yfinance(ticker: str, period: str, interval: str, session=None) -> pd.DataFrame:
+    """
+    Fetch stock data using yfinance library (fixed in v0.2.66+).
+    """
+    try:
+        ticker_obj = yf.Ticker(ticker)
+        data = ticker_obj.history(period=period, interval=interval)
+        
+        if data.empty:
+            return pd.DataFrame()
+        
+        # Ensure Adj Close column exists
+        if "Adj Close" not in data.columns and "Close" in data.columns:
+            data["Adj Close"] = data["Close"]
+        
+        return data
+        
+    except Exception as e:
+        print(f"[yfinance error for {ticker}]: {e}")
+        return pd.DataFrame()
+
+
+def build_exog(
+    prices: pd.Series,
+    volume: pd.Series,
+    download_period: str,
+    interval: str,
+    mode: str,
+    fred_api_key: Optional[str] = None,
+) -> pd.DataFrame:
+    """Build exogenous feature DataFrame for forecasting models.
+    
+    Args:
+        prices: Price series
+        volume: Volume series
+        download_period: Download period string
+        interval: Data interval
+        mode: Resampling mode ('D', 'W', 'M')
+        fred_api_key: Optional FRED API key for macro data
+    
+    Returns:
+        DataFrame with exogenous features aligned to price index.
+    """
+    if prices.empty:
+        return pd.DataFrame()
+    
+    exog = pd.DataFrame(index=prices.index)
+    
+    # Volume feature (normalized)
+    if not volume.empty:
+        vol_aligned = volume.reindex(prices.index).ffill().fillna(0)
+        if vol_aligned.std() > 0:
+            exog["volume_norm"] = (vol_aligned - vol_aligned.mean()) / vol_aligned.std()
+        else:
+            exog["volume_norm"] = 0.0
+    
+    # Simple momentum features
+    if len(prices) > 5:
+        returns = prices.pct_change().fillna(0)
+        exog["momentum_5"] = returns.rolling(window=5, min_periods=1).mean()
+    
+    if len(prices) > 10:
+        exog["momentum_10"] = prices.pct_change().rolling(window=10, min_periods=1).mean()
+    
+    # Clean up any infinities or NaNs
+    exog = exog.replace([np.inf, -np.inf], 0).fillna(0)
+    
+    return exog
 
 
 def load_series_for_horizon(ticker: str, horizon_settings: Dict[str, object], fred_api_key: Optional[str] = None, extra_history_period: Optional[str] = None, use_sample_data: bool = False) -> Dict[str, object]:
