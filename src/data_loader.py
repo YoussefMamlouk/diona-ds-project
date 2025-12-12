@@ -6,27 +6,158 @@ import math
 import pandas as pd
 import yfinance as yf
 from typing import Dict, Optional
+import os
+import hashlib
+import glob
 
 
-def fetch_yfinance(ticker: str, period: str, interval: str, session=None) -> pd.DataFrame:
-    """
-    Fetch stock data using yfinance library (fixed in v0.2.66+).
-    """
+def _get_cache_filename(ticker: str, period: str, interval: str) -> str:
+    """Generate a cache filename based on ticker only (overwrites old cache)."""
+    # Use a single cache file per ticker to always keep the latest data
+    # This ensures we always have the most recent data and don't accumulate old files
+    return f"yfinance_cache_{ticker}.csv"
+
+
+def _clean_old_cache_files(ticker: str):
+    """Delete old cache files for this ticker, keeping only the latest one."""
+    cache_dir = os.path.join(os.getcwd(), "data", "raw")
+    if not os.path.exists(cache_dir):
+        return
+    
+    # Find all cache files for this ticker (old hash-based naming)
+    import glob
+    old_pattern = os.path.join(cache_dir, f"yfinance_cache_{ticker}_*.csv")
+    old_files = glob.glob(old_pattern)
+    
+    # Delete old hash-based cache files
+    for old_file in old_files:
+        try:
+            os.remove(old_file)
+        except Exception:
+            pass
+
+
+def _load_from_cache(ticker: str, period: str, interval: str) -> Optional[pd.DataFrame]:
+    """Load data from cache if it exists."""
+    cache_dir = os.path.join(os.getcwd(), "data", "raw")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, _get_cache_filename(ticker, period, interval))
+    
+    if os.path.exists(cache_file):
+        try:
+            data = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            # Convert index to datetime if it's not already
+            if not isinstance(data.index, pd.DatetimeIndex):
+                data.index = pd.to_datetime(data.index)
+            # Convert to timezone-naive if needed (yfinance returns timezone-aware)
+            if hasattr(data.index, 'tz') and data.index.tz is not None:
+                data.index = data.index.tz_localize(None)
+            print(f"[Cache] Loaded {ticker} data from cache ({len(data)} rows)")
+            return data
+        except Exception as e:
+            print(f"[Cache] Error loading cache: {e}")
+            return None
+    return None
+
+
+def _save_to_cache(ticker: str, period: str, interval: str, data: pd.DataFrame):
+    """Save downloaded data to cache, overwriting any old cache for this ticker."""
+    if data.empty:
+        return
+    
+    # Clean old cache files first
+    _clean_old_cache_files(ticker)
+    
+    cache_dir = os.path.join(os.getcwd(), "data", "raw")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, _get_cache_filename(ticker, period, interval))
+    
     try:
-        ticker_obj = yf.Ticker(ticker)
-        data = ticker_obj.history(period=period, interval=interval)
+        # Make a copy to avoid modifying original
+        data_to_save = data.copy()
+        # Convert timezone-aware index to naive for CSV storage
+        if data_to_save.index.tz is not None:
+            data_to_save.index = data_to_save.index.tz_localize(None)
+        data_to_save.to_csv(cache_file)
+        print(f"[Cache] Saved {ticker} data to cache ({len(data)} rows, overwrote old cache)")
+    except Exception as e:
+        print(f"[Cache] Error saving cache: {e}")
+
+
+def fetch_yfinance(ticker: str, period: str, interval: str, session=None, use_cache: bool = True) -> pd.DataFrame:
+    """
+    Fetch stock data using yfinance library with caching support.
+    
+    Note: For caching, we always fetch daily data (interval='1d') and cache it.
+    The cache file is ticker-specific only, so it gets overwritten with the latest fetch.
+    This ensures we always have the most recent and complete data.
+    
+    Args:
+        ticker: Stock ticker symbol
+        period: Download period (e.g., '1y', '2y', '3y')
+        interval: Data interval (e.g., '1d', '1wk', '1mo') - but we always fetch '1d' for cache
+        session: Optional yfinance session
+        use_cache: If True, use cached data if available, and cache new downloads
         
-        if data.empty:
+    Returns:
+        DataFrame with stock data
+    """
+    # Try to load from cache first (cache is always daily data)
+    if use_cache:
+        # Cache uses simple filename: yfinance_cache_{ticker}.csv (always daily data)
+        cached_data = _load_from_cache(ticker, period, interval)
+        if cached_data is not None:
+            # Cache always contains daily data, resample if needed
+            if interval != "1d":
+                # Resample cached daily data to requested interval
+                if interval == "1wk":
+                    resampled = cached_data.resample("W-FRI").last()
+                elif interval == "1mo":
+                    resampled = cached_data.resample("MS").last()
+                else:
+                    resampled = cached_data
+                print(f"[Cache] Resampled cached data to {interval} interval ({len(resampled)} rows)")
+                return resampled
+            return cached_data
+    
+    # Download from Yahoo Finance
+    # Always fetch daily data for maximum flexibility and caching
+    fetch_interval = "1d"  # Always fetch daily, resample later if needed
+    try:
+        print(f"[Download] Fetching {ticker} data from Yahoo Finance (period={period}, interval={fetch_interval})...")
+        ticker_obj = yf.Ticker(ticker)
+        daily_data = ticker_obj.history(period=period, interval=fetch_interval)
+        
+        if daily_data.empty:
+            print(f"[Download] No data returned for {ticker}")
             return pd.DataFrame()
         
         # Ensure Adj Close column exists
-        if "Adj Close" not in data.columns and "Close" in data.columns:
-            data["Adj Close"] = data["Close"]
+        if "Adj Close" not in daily_data.columns and "Close" in daily_data.columns:
+            daily_data["Adj Close"] = daily_data["Close"]
+        
+        # Save to cache (always save daily data)
+        if use_cache:
+            _save_to_cache(ticker, period, "1d", daily_data)
+        
+        # Resample if needed (after saving daily to cache)
+        # Note: We return resampled data but cache always contains daily data
+        if interval != "1d":
+            if interval == "1wk":
+                data = daily_data.resample("W-FRI").last()
+            elif interval == "1mo":
+                data = daily_data.resample("MS").last()
+            else:
+                data = daily_data
+            print(f"[Download] Successfully downloaded {len(data)} rows for {ticker} (resampled from {len(daily_data)} daily rows)")
+        else:
+            data = daily_data
+            print(f"[Download] Successfully downloaded {len(data)} rows for {ticker}")
         
         return data
         
     except Exception as e:
-        print(f"[yfinance error for {ticker}]: {e}")
+        print(f"[Download] Error fetching {ticker} data: {e}")
         return pd.DataFrame()
 
 
@@ -95,9 +226,43 @@ def load_series_for_horizon(ticker: str, horizon_settings: Dict[str, object], fr
 		volume = pd.Series(data=(100000 + rs.randint(-5000, 5000, size=len(dates))), index=dates)
 		data = None
 	else:
-		# Allow caller to override the computed download period to fetch extra history
-		download_period = extra_history_period if extra_history_period is not None else horizon_settings["download_period"]
-		data = fetch_yfinance(ticker, download_period, horizon_settings["interval"]) 
+		# Always fetch daily data (most granular) and cache it
+		# This allows resampling to any interval (daily, weekly, monthly) from the same cache
+		# Calculate required download period based on horizon
+		if extra_history_period is not None:
+			download_period = extra_history_period
+		else:
+			# For caching: always fetch enough daily data, then resample as needed
+			# This ensures we have enough data for any horizon
+			mode = horizon_settings["mode"]
+			invested_days = horizon_settings["invested_days"]
+			if mode == "D":
+				download_days = int(max(math.ceil(invested_days * 2.5), 365))
+			elif mode == "W":
+				download_days = int(max(math.ceil(invested_days * 3), 730))
+			else:  # monthly
+				download_days = int(max(math.ceil(invested_days * 5), 1095))
+			
+			# Map to yfinance period
+			if download_days <= 90:
+				download_period = "90d"
+			elif download_days <= 180:
+				download_period = "6mo"
+			elif download_days <= 365:
+				download_period = "1y"
+			elif download_days <= 730:
+				download_period = "2y"
+			elif download_days <= 1095:
+				download_period = "3y"
+			elif download_days <= 1825:
+				download_period = "5y"
+			else:
+				download_period = "10y"
+		
+		# Always fetch daily data for maximum flexibility
+		# Pass the requested interval for display, but fetch daily and resample
+		# The cache always stores daily data
+		data = fetch_yfinance(ticker, download_period, horizon_settings["interval"], use_cache=True) 
 
 		if data.empty:
 			return {"prices": pd.Series(dtype=float), "raw_prices": pd.Series(dtype=float), "log_returns": pd.Series(dtype=float), "exog_df": pd.DataFrame(), "volume": pd.Series(dtype=float), "horizon_settings": horizon_settings}
@@ -198,25 +363,33 @@ def compute_horizon_settings(value: float, unit: str) -> Dict[str, object]:
 		invested_days = steps * 21
 
 	# Choose a download period that gives enough historical points for
-	# resampling and backtesting. For monthly horizons prefer at least 1 year
-	# of history so models have several monthly observations; for weekly prefer
-	# at least 1 year as well. Daily horizons keep a shorter window.
+	# resampling and backtesting. Fetch more data for medium/long-term forecasting.
+	# For monthly horizons: at least 2 years of history (24+ monthly observations)
+	# For weekly horizons: at least 2 years of history (104+ weekly observations)
+	# For daily horizons: at least 1 year for short-term, more for longer horizons
 	if mode == "D":
-		download_days = int(max(math.ceil(invested_days * 1.2), 90))
+		# For daily: fetch at least 1 year, or 2x the forecast horizon (whichever is larger)
+		download_days = int(max(math.ceil(invested_days * 2.5), 365))
 	elif mode == "W":
-		download_days = int(max(math.ceil(invested_days * 2), 252))
+		# For weekly: fetch at least 2 years (104 weeks) for proper backtesting
+		download_days = int(max(math.ceil(invested_days * 3), 730))
 	else:  # monthly
-		download_days = int(max(math.ceil(invested_days * 4), 365))
+		# For monthly: fetch at least 3 years (36 months) for proper backtesting
+		download_days = int(max(math.ceil(invested_days * 5), 1095))
 
+	# Map download days to yfinance period strings
+	# Always fetch enough data for proper model training and evaluation
 	if download_days <= 90:
 		download_period = "90d"
 	elif download_days <= 180:
 		download_period = "6mo"
-	elif download_days <= 252:
+	elif download_days <= 365:
 		download_period = "1y"
-	elif download_days <= 504:
+	elif download_days <= 730:
 		download_period = "2y"
-	elif download_days <= 1260:
+	elif download_days <= 1095:
+		download_period = "3y"
+	elif download_days <= 1825:
 		download_period = "5y"
 	else:
 		download_period = "10y"

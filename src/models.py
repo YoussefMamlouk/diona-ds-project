@@ -149,6 +149,44 @@ def forecast_with_xgb(log_returns: pd.Series, exog_df: Optional[pd.DataFrame], s
         history.append(next_ret)
     return np.asarray(preds)
 
+def train_ar1(log_returns: pd.Series, exog_df: Optional[pd.DataFrame] = None):
+    """Train an explicit AR(1) model (autoregressive model of order 1).
+    
+    This is equivalent to ARIMA(1,0,0) but provided as a separate function
+    for clarity and explicit model comparison.
+    
+    Args:
+        log_returns: Time series of log returns
+        exog_df: Optional DataFrame of exogenous variables
+        
+    Returns:
+        Fitted ARIMA model with order (1,0,0)
+    """
+    if exog_df is not None and not exog_df.empty:
+        aligned_exog = exog_df.reindex(log_returns.index).dropna()
+        aligned_returns = log_returns.reindex(aligned_exog.index).dropna()
+        if len(aligned_returns) < 10:
+            raise ValueError("Insufficient data after alignment for AR(1) model")
+        model = ARIMA(aligned_returns, order=(1, 0, 0), exog=aligned_exog).fit()
+    else:
+        model = ARIMA(log_returns, order=(1, 0, 0)).fit()
+    return model
+
+def forecast_ar1(model, steps: int, exog_future: Optional[np.ndarray] = None) -> np.ndarray:
+    """Forecast using a fitted AR(1) model.
+    
+    Args:
+        model: Fitted ARIMA model with order (1,0,0)
+        steps: Number of steps to forecast
+        exog_future: Optional 2D array with shape (steps, n_exog) for exogenous variables
+        
+    Returns:
+        Array of forecasted log returns
+    """
+    if exog_future is not None:
+        return model.forecast(steps=steps, exog=exog_future).to_numpy().flatten()
+    return model.forecast(steps=steps).to_numpy().flatten()
+
 def forecast_from_arima(model, model_type: str, steps: int, exog_future: Optional[np.ndarray] = None):
     """Forecast using either a statsmodels ARIMAResults or a pmdarima AutoARIMA.
     exog_future (optional): 2D array-like with shape (steps, n_exog) used when
