@@ -146,7 +146,6 @@ The project generates the following outputs in the `results/` directory:
 │   └── raw/               # Raw data storage
 ├── results/               # Generated outputs (plots, CSVs)
 ├── notebooks/             # Exploratory notebooks
-├── tests/                 # Unit tests
 ├── environment.yml        # Conda environment file
 └── requirements.txt       # pip requirements file
 ```
@@ -159,19 +158,6 @@ All random seeds are set to ensure reproducibility:
 - Monte Carlo: `np.random.seed(42)`
 
 Run with `--use-sample-data` for fully deterministic results suitable for grading.
-
-## Testing
-
-Run tests:
-```bash
-python -m pytest tests/
-```
-
-Or run individual test files:
-```bash
-python -m pytest tests/test_forecasting.py
-python -m pytest tests/test_models_pipeline.py
-```
 
 ## Key Findings
 
