@@ -84,7 +84,14 @@ def _save_to_cache(ticker: str, period: str, interval: str, data: pd.DataFrame):
         print(f"[Cache] Error saving cache: {e}")
 
 
-def fetch_yfinance(ticker: str, period: str, interval: str, session=None, use_cache: bool = True) -> pd.DataFrame:
+def fetch_yfinance(
+    ticker: str,
+    period: str,
+    interval: str,
+    session=None,
+    use_cache: bool = True,
+    cache_only: bool = False,
+) -> pd.DataFrame:
     """
     Fetch stock data using yfinance library with caching support.
     
@@ -98,12 +105,13 @@ def fetch_yfinance(ticker: str, period: str, interval: str, session=None, use_ca
         interval: Data interval (e.g., '1d', '1wk', '1mo') - but we always fetch '1d' for cache
         session: Optional yfinance session
         use_cache: If True, use cached data if available, and cache new downloads
+        cache_only: If True, never download; return cached data or empty DataFrame.
         
     Returns:
         DataFrame with stock data
     """
     # Try to load from cache first (cache is always daily data)
-    if use_cache:
+    if use_cache or cache_only:
         # Cache uses simple filename: yfinance_cache_{ticker}.csv (always daily data)
         cached_data = _load_from_cache(ticker, period, interval)
         if cached_data is not None:
@@ -119,6 +127,11 @@ def fetch_yfinance(ticker: str, period: str, interval: str, session=None, use_ca
                 print(f"[Cache] Resampled cached data to {interval} interval ({len(resampled)} rows)")
                 return resampled
             return cached_data
+
+    # In cache-only mode, never attempt a download.
+    if cache_only:
+        print(f"[Cache] Cache-only mode enabled but no cache found for {ticker}.")
+        return pd.DataFrame()
     
     # Download from Yahoo Finance
     # Always fetch daily data for maximum flexibility and caching
@@ -209,7 +222,14 @@ def build_exog(
     return exog
 
 
-def load_series_for_horizon(ticker: str, horizon_settings: Dict[str, object], fred_api_key: Optional[str] = None, extra_history_period: Optional[str] = None, use_sample_data: bool = False) -> Dict[str, object]:
+def load_series_for_horizon(
+	ticker: str,
+	horizon_settings: Dict[str, object],
+	fred_api_key: Optional[str] = None,
+	extra_history_period: Optional[str] = None,
+	use_sample_data: bool = False,
+	cache_only: bool = False,
+) -> Dict[str, object]:
 	"""Fetch price series and prepare exogenous features.
 
 	`horizon_settings` should be the dict returned by `src.main.compute_horizon_settings`.
@@ -262,7 +282,13 @@ def load_series_for_horizon(ticker: str, horizon_settings: Dict[str, object], fr
 		# Always fetch daily data for maximum flexibility
 		# Pass the requested interval for display, but fetch daily and resample
 		# The cache always stores daily data
-		data = fetch_yfinance(ticker, download_period, horizon_settings["interval"], use_cache=True) 
+		data = fetch_yfinance(
+			ticker,
+			download_period,
+			horizon_settings["interval"],
+			use_cache=True,
+			cache_only=cache_only,
+		)
 
 		if data.empty:
 			return {"prices": pd.Series(dtype=float), "raw_prices": pd.Series(dtype=float), "log_returns": pd.Series(dtype=float), "exog_df": pd.DataFrame(), "volume": pd.Series(dtype=float), "horizon_settings": horizon_settings}

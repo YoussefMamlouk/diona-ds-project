@@ -48,56 +48,61 @@ pip install -r requirements.txt
 
 ### Basic Usage
 
-Run the main script:
+### Simple Usage (Recommended for Grading)
+
+**Simply run the main file with no arguments:**
+
 ```bash
 python main.py
 ```
 
-The script will prompt you for:
-- Ticker symbol (e.g., TSLA, AAPL)
-- Investment horizon (e.g., "10 days", "3 months", "1 year")
+This automatically runs:
+- **Exploratory Data Analysis (EDA)** with comprehensive plots and insights
+- **Forecasting for all horizons** (10 days, 1 month, 3 months, 6 months, 1 year)
+- Uses **sample data** for reproducibility (deterministic results)
+- Saves all outputs to the `results/` directory
+
+No prompts, no arguments needed - perfect for grading!
+
+### Advanced Usage
+
+```bash
+# Use real market data instead of sample data
+python main.py --use-real-data
+
+# Run only EDA (skip forecasting)
+python main.py --eda
+
+# Run only forecasting (skip EDA)
+python main.py --no-eda
+
+# Run with specific horizon (non-interactive)
+python main.py --horizon "10 days"      # Short-term
+python main.py --horizon "3 months"    # Medium-term
+python main.py --horizon "1 year"      # Long-term
+
+# Use different ticker (default: TSLA)
+python main.py --ticker AAPL
+
+# Disable ML models (statistical models only)
+python main.py --no-ml
+
+# Adjust number of Monte Carlo scenarios
+python main.py --n-scenarios 1000
+```
 
 ### Command Line Options
 
-```bash
-# Run ALL forecast horizons in a single run (recommended)
-python main.py --demo --all-horizons --save
-# This runs: 10 days, 1 month, 3 months, 6 months, 1 year
-# Generates comprehensive comparison across all timeframes
-
-# Run deterministic demo with sample data (for offline grading)
-# Defaults to 10 days, but can specify longer horizons
-python main.py --demo --use-sample-data --save
-python main.py --demo --horizon "3 months" --save  # Override default with longer horizon
-
-# Run with specific horizon (non-interactive)
-python main.py --horizon "10 days" --save      # Short-term
-python main.py --horizon "3 months" --save    # Medium-term
-python main.py --horizon "1 year" --save      # Long-term
-
-# Interactive mode (prompts for ticker and horizon)
-python main.py --save
-
-# Disable ML models (statistical models only)
-python main.py --no-ml --save
-
-# Adjust number of Monte Carlo scenarios
-python main.py --n-scenarios 1000 --save
-```
-
-### Options
-- `--all-horizons` - **Run forecasts for all horizon types in a single run**
-  - Tests: 10 days, 1 month, 3 months, 6 months, 1 year
-  - Generates comprehensive comparison table
-  - Saves all outputs with horizon-specific filenames
-- `--demo` - Run deterministic demo (TSLA, defaults to 10 days, can override with --horizon)
-- `--use-sample-data` - Use synthetic data (for offline grading)
-- `--save` - Save all plots and outputs to `results/` directory
-- `--horizon` - Specify horizon (e.g., "10 days", "3 months", "1 year")
-  - Supports: days, weeks, months, years
-  - Can combine with --demo to test longer horizons
+- `--use-real-data` - Use real market data from Yahoo Finance (default: uses sample data for reproducibility)
+- `--use-sample-data` - Use synthetic data (default behavior for reproducibility)
+- `--eda` - Run only EDA analysis
+- `--no-eda` - Skip EDA, only run forecasting
+- `--all-horizons` - Run forecasts for all horizon types (default behavior)
+- `--horizon` - Specify single horizon (e.g., "10 days", "3 months", "1 year")
+- `--ticker` - Stock ticker symbol (default: TSLA)
 - `--n-scenarios` - Number of Monte Carlo scenarios (default: 500)
 - `--no-ml` - Disable XGBoost (statistical models only)
+- `--save` - Save all plots and outputs (default behavior)
 
 ### Supported Forecast Horizons
 The system supports forecasting for any horizon:
@@ -111,16 +116,52 @@ Note: For very long horizons (>1 year), forecasts become less precise and the sy
 
 The project generates the following outputs in the `results/` directory:
 
-1. **Price Forecast Plot** (`forecast_<TICKER>_<TIMESTAMP>.png`)
+### Exploratory Data Analysis (EDA) Outputs
+
+1. **Price Trend Analysis** (`eda_price_trend_<TICKER>_<TIMESTAMP>.png`)
+   - Price movements with moving averages
+   - Daily price ranges
+   - Cumulative returns
+
+2. **Returns Distribution** (`eda_returns_distribution_<TICKER>_<TIMESTAMP>.png`)
+   - Histogram of returns
+   - Q-Q plot for normality testing
+   - Year-over-year comparisons
+   - Time series of returns
+
+3. **Volatility Analysis** (`eda_volatility_<TICKER>_<TIMESTAMP>.png`)
+   - Rolling volatility (21-day and 252-day)
+   - Volatility clustering patterns
+   - Volatility distribution
+   - Year-over-year volatility trends
+
+4. **Volume Analysis** (`eda_volume_<TICKER>_<TIMESTAMP>.png`)
+   - Trading volume trends
+   - Price vs volume relationships
+   - Volume distributions
+
+5. **Correlation Analysis** (`eda_correlation_<TICKER>_<TIMESTAMP>.png`)
+   - Correlation matrices
+   - Returns vs volume relationships
+   - Autocorrelation functions
+
+6. **Statistical Summary** (`eda_statistics_<TICKER>_<TIMESTAMP>.txt`)
+   - Comprehensive statistical metrics
+   - Normality tests
+   - Risk assessments
+
+### Forecasting Outputs
+
+1. **Price Forecast Plot** (`forecast_<TICKER>_<HORIZON>_<TIMESTAMP>.png`)
    - Historical prices
    - Forecasted prices with confidence intervals
    - Monte Carlo percentiles (10th, 50th, 90th)
 
-2. **Volatility Forecast Plot** (`volatility_forecast_<TICKER>_<TIMESTAMP>.png`)
+2. **Volatility Forecast Plot** (`volatility_forecast_<TICKER>_<HORIZON>_<TIMESTAMP>.png`)
    - Historical rolling volatility
    - GARCH(1,1) forecasted volatility
 
-3. **Model Comparison CSV** (`model_comparison_<TICKER>_<TIMESTAMP>.csv`)
+3. **Model Comparison CSV** (`model_comparison_<TICKER>_<HORIZON>_<TIMESTAMP>.csv`)
    - RMSE, MAE, MAPE for each model
    - Indicates whether ML models beat the baseline
 

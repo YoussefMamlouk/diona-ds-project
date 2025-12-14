@@ -358,9 +358,56 @@ def generate_forecast(
     forecast_series = pd.Series(forecast_prices, index=future_dates)
 
     # Step 7: Estimate future volatility using GARCH(1,1)
-    returns = 100 * log_returns.dropna()
-    if returns.empty:
-        raise ValueError("Insufficient return data to estimate volatility.")
+    #
+    # IMPORTANT:
+    # `log_returns` may be weekly/monthly (because `prices` is resampled for the selected horizon).
+    # Fitting GARCH on resampled returns and then annualizing with sqrt(252) will massively inflate
+    # volatility (e.g., >200%) and often produces flat multi-step forecasts.
+    #
+    # To keep units consistent, we always fit GARCH on DAILY log-returns and then aggregate the
+    # predicted daily variance into per-step (daily/weekly/monthly) volatility.
+    horizon_days = int(horizon_settings.get("invested_days", forecast_steps))
+
+    # Determine "days per step" for aggregation.
+    if horizon_settings["interval"] == "1d":
+        days_per_step = 1
+    elif horizon_settings["interval"] == "1wk":
+        days_per_step = 5
+    elif horizon_settings["interval"] == "1mo":
+        days_per_step = 21
+    else:
+        days_per_step = 1
+
+    # Prefer true daily prices if available; otherwise fetch daily series from cache.
+    daily_prices: Optional[pd.Series] = None
+    if raw_prices is not None and len(raw_prices) > 0:
+        try:
+            gaps = pd.Series(raw_prices.index).sort_values().diff().dropna()
+            median_gap_days = float(gaps.dt.total_seconds().median() / 86400.0) if len(gaps) else 999.0
+            if median_gap_days <= 3.5:
+                daily_prices = raw_prices.dropna()
+        except Exception:
+            daily_prices = None
+
+    if daily_prices is None:
+        try:
+            from .data_loader import fetch_yfinance
+            daily_data = fetch_yfinance(ticker, horizon_settings.get("download_period", "5y"), "1d", use_cache=True)
+            if not daily_data.empty and "Adj Close" in daily_data.columns:
+                daily_prices = daily_data["Adj Close"].dropna()
+            elif not daily_data.empty and "Close" in daily_data.columns:
+                daily_prices = daily_data["Close"].dropna()
+        except Exception:
+            daily_prices = None
+
+    if daily_prices is None or daily_prices.empty:
+        raise ValueError("Insufficient daily price data to estimate volatility.")
+
+    daily_log_returns = np.log(daily_prices).diff().replace([np.inf, -np.inf], np.nan).dropna()
+    if daily_log_returns.empty:
+        raise ValueError("Insufficient daily return data to estimate volatility.")
+
+    returns = 100 * daily_log_returns  # percent daily returns for arch_model stability
     
     try:
         from arch import arch_model
@@ -374,26 +421,60 @@ def generate_forecast(
 
     garch = arch_model(returns, vol="Garch", p=1, q=1, dist="normal")
     garch_fit = garch.fit(disp="off")
-    garch_forecast = garch_fit.forecast(horizon=forecast_steps)
-    sigma_forecast = pd.Series(garch_forecast.variance.values[-1, :] ** 0.5, index=future_dates)
-    
-    # Adjust volatility based on horizon (amplify for long-term uncertainty)
-    if forecast_steps > 20:
-        sigma_soft = sigma_forecast * 1.5
-    else:
-        sigma_soft = sigma_forecast * 0.8
+
+    # Forecast DAILY variance for the full horizon in business-day units.
+    garch_forecast = garch_fit.forecast(horizon=horizon_days)
+    daily_var_pct2 = garch_forecast.variance.values[-1, :]  # (% return)^2 per day
+    daily_var_pct2 = np.asarray(daily_var_pct2, dtype=float)
+    if daily_var_pct2.size < horizon_days:
+        # defensive: pad with last value
+        pad = np.full(horizon_days - daily_var_pct2.size, float(daily_var_pct2[-1]) if daily_var_pct2.size else 0.0)
+        daily_var_pct2 = np.concatenate([daily_var_pct2, pad])
+
+    # Aggregate daily variance into each forecast "step" (day/week/month).
+    # - period_std_decimal is used for Monte Carlo shocks (consistent with step frequency)
+    # - sigma_forecast is for plotting/reporting (annualized %)
+    period_std_decimal = []
+    sigma_ann_pct = []
+    for i in range(forecast_steps):
+        a = i * days_per_step
+        b = min((i + 1) * days_per_step, horizon_days)
+        chunk = daily_var_pct2[a:b]
+        if chunk.size == 0:
+            chunk = daily_var_pct2[-1:]
+        # Convert daily %^2 -> daily decimal variance
+        daily_var_dec = (chunk / (100.0 ** 2))
+        period_var_dec = float(np.sum(daily_var_dec))  # variance adds over days
+        period_std_decimal.append(float(np.sqrt(max(period_var_dec, 0.0))))
+
+        mean_daily_var_dec = float(np.mean(daily_var_dec))
+        sigma_ann_pct.append(float(np.sqrt(max(mean_daily_var_dec, 0.0) * 252.0) * 100.0))
+
+    period_std_decimal = np.asarray(period_std_decimal, dtype=float)
+    sigma_forecast = pd.Series(sigma_ann_pct, index=future_dates)
+
+    # Also keep a daily-resolution volatility forecast for plotting (annualized %).
+    # This prevents monthly/weekly horizons from looking like a "straight line" with only a few markers.
+    try:
+        start_daily = pd.Timestamp(daily_prices.index[-1]) + pd.offsets.BDay()
+        daily_future_dates = pd.bdate_range(start=start_daily, periods=horizon_days)
+        sigma_daily_forecast = pd.Series(
+            np.sqrt(np.maximum(daily_var_pct2[:horizon_days], 0.0)) * np.sqrt(252.0),
+            index=daily_future_dates,
+        )
+    except Exception:
+        sigma_daily_forecast = None
+
+    # Soft adjustment used for uncertainty bands / MC (keep sigma_forecast as the raw model output).
+    vol_scale = 1.25 if forecast_steps > 20 else 1.0
+    period_std_soft_decimal = period_std_decimal * vol_scale
 
     # Step 8: Monte Carlo simulation for probabilistic forecasts
     num_sims = int(num_sims)
     np.random.seed(42)  # For reproducibility
     
-    # Choose volatility source: historical (long horizon) or GARCH (short horizon)
-    if forecast_steps > 20:
-        historical_vol = float(log_returns.std())
-        # Double historical vol for long-term to reflect increasing uncertainty
-        sigma_for_mc = np.full(forecast_steps, historical_vol * 2.0)
-    else:
-        sigma_for_mc = sigma_soft.values / 100.0
+    # Volatility for MC must match the step frequency of `adjusted_returns` (daily/weekly/monthly).
+    sigma_for_mc = period_std_soft_decimal
     
     # Generate random shocks and simulate price paths
     shocks = np.random.normal(size=(num_sims, forecast_steps)) * sigma_for_mc
@@ -412,8 +493,9 @@ def generate_forecast(
         hybrid_forecast_upper = mc_p90.copy()
         hybrid_forecast_lower = mc_p10.copy()
     else:
-        # Short horizons: use GARCH-based bounds
-        impact_vol = last_price * (sigma_soft / 100)
+        # Confidence bounds consistent with step frequency:
+        # impact is proportional to period std of returns (decimal).
+        impact_vol = last_price * pd.Series(period_std_soft_decimal, index=future_dates)
         hybrid_forecast_upper = forecast_series + 1.96 * impact_vol
         hybrid_forecast_lower = forecast_series - 1.96 * impact_vol
     
@@ -431,6 +513,7 @@ def generate_forecast(
         "best_mape": best_mape,
         "signal_quality": signal_quality,
         "sigma_forecast": sigma_forecast,
+        "sigma_daily_forecast": sigma_daily_forecast,
         "last_price": last_price,
         "forecast_returns": forecast_returns,
         "all_metrics": all_metrics,  # Include all metrics for CSV export
@@ -707,23 +790,74 @@ def plot_volatility_forecast(
     log_returns: pd.Series,
     sigma_forecast: pd.Series,
     save: bool = False,
-    horizon_suffix: str = ""
+    horizon_suffix: str = "",
+    raw_prices: Optional[pd.Series] = None,
+    sigma_daily_forecast: Optional[pd.Series] = None
 ) -> Optional[str]:
     """Plot historical volatility vs GARCH forecast.
     
     Args:
         ticker: Stock symbol
-        log_returns: Historical log returns series
-        sigma_forecast: GARCH forecasted volatility (standard deviation)
+        log_returns: Historical log returns series (may be resampled for weekly/monthly horizons)
+        sigma_forecast: GARCH forecasted volatility (annualized percentage)
         save: Whether to save the plot
         horizon_suffix: Optional suffix to add to filename (e.g., "10_days", "3_months")
+        raw_prices: Optional raw daily prices (used to calculate accurate daily historical volatility)
         
     Returns:
         Path to saved file if save=True, otherwise None
     """
-    # Calculate historical rolling volatility (21-day window, annualized)
-    if len(log_returns) > 21:
-        rolling_vol = log_returns.rolling(window=21).std() * np.sqrt(252) * 100
+    # Calculate historical rolling volatility from *daily* data.
+    # Important: for monthly/weekly horizons, yfinance may return monthly/weekly prices,
+    # so `raw_prices` may NOT be daily. In that case, pull daily prices for this plot.
+    daily_prices: Optional[pd.Series] = None
+    if raw_prices is not None and len(raw_prices) > 0:
+        try:
+            # Use median day gap as a robust "daily-ish" detector (infer_freq often returns None).
+            gaps = pd.Series(raw_prices.index).sort_values().diff().dropna()
+            median_gap_days = float(gaps.dt.total_seconds().median() / 86400.0) if len(gaps) else 999.0
+            if median_gap_days <= 3.5:  # business-day-ish
+                daily_prices = raw_prices
+        except Exception:
+            daily_prices = None
+
+    if daily_prices is None:
+        try:
+            from .data_loader import fetch_yfinance
+            daily_data = fetch_yfinance(ticker, "5y", "1d", use_cache=True)
+            if not daily_data.empty and "Adj Close" in daily_data.columns:
+                daily_prices = daily_data["Adj Close"].dropna()
+            elif not daily_data.empty and "Close" in daily_data.columns:
+                daily_prices = daily_data["Close"].dropna()
+        except Exception:
+            daily_prices = None
+
+    if daily_prices is not None and len(daily_prices) > 21:
+        daily_log_returns = np.log(daily_prices).diff().replace([np.inf, -np.inf], np.nan).dropna()
+        if len(daily_log_returns) > 21:
+            rolling_vol = daily_log_returns.rolling(window=21).std() * np.sqrt(252) * 100
+            rolling_vol = rolling_vol.dropna()
+        else:
+            rolling_vol = pd.Series(dtype=float)
+    elif len(log_returns) > 21:
+        # Fallback: use provided log_returns, but need to determine frequency
+        # Infer frequency from the data
+        try:
+            freq = pd.infer_freq(log_returns.index)
+            if freq and 'W' in freq:
+                # Weekly data: annualize with sqrt(52)
+                annualization_factor = np.sqrt(52)
+            elif freq and 'M' in freq or freq == 'MS':
+                # Monthly data: annualize with sqrt(12)
+                annualization_factor = np.sqrt(12)
+            else:
+                # Assume daily: annualize with sqrt(252)
+                annualization_factor = np.sqrt(252)
+        except Exception:
+            # Default to daily if can't infer
+            annualization_factor = np.sqrt(252)
+        
+        rolling_vol = log_returns.rolling(window=21).std() * annualization_factor * 100
         rolling_vol = rolling_vol.dropna()
     else:
         rolling_vol = pd.Series(dtype=float)
@@ -735,9 +869,37 @@ def plot_volatility_forecast(
         plt.plot(rolling_vol.index, rolling_vol.values, label="Historical Volatility (21-day rolling)", 
                 color="blue", alpha=0.7, linewidth=1.5)
     
-    # Plot GARCH forecast
-    plt.plot(sigma_forecast.index, sigma_forecast.values, label="GARCH(1,1) Forecast", 
-            color="red", linewidth=2, marker='o', markersize=4)
+    # Plot GARCH forecast:
+    # - daily curve (if available) to show shape
+    # - period-end markers from sigma_forecast for the specific horizon
+    if sigma_daily_forecast is not None and len(sigma_daily_forecast) > 0:
+        plt.plot(
+            sigma_daily_forecast.index,
+            sigma_daily_forecast.values,
+            label="GARCH(1,1) Forecast (daily, annualized)",
+            color="red",
+            linewidth=2,
+            alpha=0.85,
+        )
+        plt.plot(
+            sigma_forecast.index,
+            sigma_forecast.values,
+            label="GARCH Forecast (horizon points)",
+            color="darkred",
+            linewidth=0,
+            marker="o",
+            markersize=4,
+        )
+    else:
+        plt.plot(
+            sigma_forecast.index,
+            sigma_forecast.values,
+            label="GARCH(1,1) Forecast (annualized)",
+            color="red",
+            linewidth=2,
+            marker="o",
+            markersize=4,
+        )
     
     # Add vertical line separating historical from forecast
     if not rolling_vol.empty:
@@ -840,6 +1002,8 @@ def clean_old_results(ticker: str):
         f"forecast_{ticker}_*.png",
         f"volatility_forecast_{ticker}_*.png",
         f"model_comparison_{ticker}_*.csv",
+        f"eda_*_{ticker}_*.png",
+        f"eda_statistics_{ticker}_*.txt",
     ]
     
     for pattern in patterns:

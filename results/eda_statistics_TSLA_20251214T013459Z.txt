@@ -1,0 +1,49 @@
+======================================================================
+  STATISTICAL SUMMARY: TSLA
+======================================================================
+
+PRICE STATISTICS
+----------------------------------------------------------------------
+Current Price:          $452.41
+Price Range:            $108.10 - $479.86
+Mean Price:             $263.09
+Median Price:           $247.24
+Std Dev:                $74.46
+
+RETURNS STATISTICS
+----------------------------------------------------------------------
+Mean Daily Return:      0.1328%
+Median Daily Return:    0.1463%
+Std Dev (Daily):        3.8315%
+Annualized Return:      33.47%
+Annualized Volatility:  60.82%
+Skewness:               0.3551
+Kurtosis:               3.0835
+Min Return:             -15.43%
+Max Return:             22.69%
+
+VOLATILITY STATISTICS (21-Day Rolling)
+----------------------------------------------------------------------
+Mean Volatility:       57.89%
+Median Volatility:     55.10%
+Min Volatility:        20.93%
+Max Volatility:        112.91%
+Std Dev of Volatility: 17.69%
+
+NORMALITY TESTS
+----------------------------------------------------------------------
+Jarque-Bera Test:
+  Statistic:            518.0299
+  p-value:               0.0000
+  Result:                Not Normal
+Shapiro-Wilk Test:
+  Statistic:            0.9700
+  p-value:               0.0000
+  Result:                Not Normal
+
+DATA QUALITY
+----------------------------------------------------------------------
+Total Trading Days:     1256
+Date Range:            2020-12-14 to 2025-12-12
+Missing Values:         0
+Zero Volume Days:      0
