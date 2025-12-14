@@ -10,9 +10,8 @@ from dotenv import load_dotenv
 import argparse
 import pathlib
 
-# Use package-relative imports. Run the package with `python -m src` or use the
-# top-level `main.py` launcher. Relative imports are the recommended, idiomatic
-# approach for packages and avoid `sys.path` manipulation.
+# Use package-relative imports. Run the project with `python main.py`.
+# Relative imports are the recommended, idiomatic approach for packages.
 from src.data_loader import compute_horizon_settings, load_series_for_horizon
 from src.evaluation import generate_forecast, plot_forecast, plot_volatility_forecast, save_model_comparison_csv, clean_old_results
 
