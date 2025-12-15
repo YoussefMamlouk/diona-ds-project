@@ -36,6 +36,7 @@ This project implements and compares multiple forecasting models to predict fina
 **Using Conda (Recommended):**
 ```bash
 conda env create -f environment.yml
+conda init
 conda activate stock-forecast
 ```
 

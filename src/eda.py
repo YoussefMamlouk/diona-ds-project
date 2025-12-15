@@ -736,3 +736,5 @@ def print_insights(ticker: str, data: pd.DataFrame, prices: pd.Series, returns: 
     
     print("\n" + "="*70 + "\n")
 
+
+
