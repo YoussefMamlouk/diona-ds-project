@@ -6,7 +6,6 @@ from typing import Tuple, Dict
 
 import numpy as np
 import yfinance as yf
-from dotenv import load_dotenv
 import argparse
 import pathlib
 
@@ -30,33 +29,8 @@ except Exception as e:
     warnings.warn(f"Could not set yfinance tz cache location: {e}")
 
 
-def fetch_news_for_ticker(ticker: str, api_key):
-    """Fetch recent news articles for `ticker` using NewsAPI.org.
-
-    Returns a list of article dicts (may be empty). Caller should handle
-    network errors gracefully.
-    """
-    if not api_key:
-        return []
-    try:
-        import requests
-        url = f"https://newsapi.org/v2/everything?q={ticker}&apiKey={api_key}"
-        resp = requests.get(url, timeout=10)
-        if resp.status_code != 200:
-            return []
-        data = resp.json()
-        return data.get("articles", [])
-    except Exception:
-        return []
-
-
-def prompt_ticker() -> str:
-    while True:
-        print(" You can find the ticker symbol of your chosen stock at https://finance.yahoo.com/lookup\n")
-        ticker = input(" Enter your ticker symbol (example: TSLA): ").upper().strip()
-        if ticker:
-            return ticker
-        print(" Invalid input. Please enter a valid ticker symbol.\n")
+# Hardcoded ticker for reproducibility
+TICKER = "TSLA"
 
 
 def run_single_forecast(
@@ -64,7 +38,6 @@ def run_single_forecast(
     horizon_value: float,
     horizon_unit: str,
     args,
-    fred_api_key: str,
     current_price: float = None
 ) -> Dict:
     """Run a single forecast for a given horizon and return results.
@@ -72,7 +45,7 @@ def run_single_forecast(
     Returns a dictionary with all forecast artifacts and summary information.
     """
     horizon_settings = compute_horizon_settings(horizon_value, horizon_unit)
-    data = load_series_for_horizon(ticker, horizon_settings, fred_api_key, 
+    data = load_series_for_horizon(ticker, horizon_settings, 
                                    extra_history_period=args.extra_history, 
                                    use_sample_data=args.use_sample_data,
                                    cache_only=getattr(args, "cache_only", False))
@@ -241,28 +214,19 @@ def prompt_horizon() -> Tuple[float, str]:
         return value, unit
 
 def main():
-    load_dotenv()
-    api_key = os.getenv("API_KEY")
-    fred_api_key = os.getenv("FRED_API_KEY", "dde92ad42f9e89f8f7d889a4b79f2efb")
-
     # Make results reproducible by default
     np.random.seed(42)
 
     # ------------------------------------------------------------------
-    # Default (no-args) behavior for grading/reproducibility:
+    # Default (no-args) behavior for reproducibility:
     # Running `python main.py` should behave like:
     #   python main.py --demo --all-horizons --save
-    # plus EDA, using ONLY cached Yahoo Finance data (no downloads).
+    # plus EDA, using ONLY cached data from data/raw/ folder.
     # ------------------------------------------------------------------
     auto_full_run = (len(sys.argv) == 1)
-
-    if not api_key or api_key.strip() == "":
-        print("\n No API key detected in .env.")
-        print("News features will be disabled unless you manually add a free API key.")
-        print("To enable news features, create a free key at:")
-        print("   https://newsapi.org/")
-        print("Then add it in your local .env file as:")
-        print("   API_KEY=your_key_here\n")
+    
+    # Hardcoded ticker for reproducibility
+    ticker = TICKER
 
     # Basic arg parsing: allow overriding history period and auto-save
     parser = argparse.ArgumentParser(add_help=False)
@@ -280,7 +244,7 @@ def main():
     args, _ = parser.parse_known_args()
 
     if auto_full_run:
-        # Reproducible default pipeline for graders
+        # Reproducible default pipeline
         args.demo = True
         args.all_horizons = True
         args.save_plot = True
@@ -303,9 +267,9 @@ def main():
     # Decide whether this run includes forecasting (vs EDA-only).
     wants_forecasts = auto_full_run or args.all_horizons or (args.horizon is not None) or (not args.run_eda)
 
+    # Always use hardcoded TSLA ticker for reproducibility
     if args.demo:
-        # Demo mode: use TSLA, allow horizon override
-        ticker = "TSLA"
+        # Demo mode: allow horizon override
         if args.horizon:
             # Parse horizon if provided with demo
             try:
@@ -320,15 +284,15 @@ def main():
                 if unit not in unit_map:
                     raise ValueError("Unsupported unit")
                 horizon_value, horizon_unit = hv, unit_map[unit]
-                print(f"Running deterministic demo: TSLA for {horizon_value} {horizon_unit}(s) (seeded)")
+                print(f"Running deterministic demo: {ticker} for {horizon_value} {horizon_unit}(s) (seeded)")
             except Exception:
                 print("Invalid --horizon format. Using default 10 days.")
                 horizon_value, horizon_unit = 10.0, "day"
-                print("Running deterministic demo: TSLA for 10 days (seeded)")
+                print(f"Running deterministic demo: {ticker} for 10 days (seeded)")
         else:
             # Default demo: 10 days
             horizon_value, horizon_unit = 10.0, "day"
-            print("Running deterministic demo: TSLA for 10 days (seeded)")
+            print(f"Running deterministic demo: {ticker} for 10 days (seeded)")
         # ensure demo saves the plot for inspection
         args.save_plot = True
     else:
@@ -348,17 +312,13 @@ def main():
                     if unit not in unit_map:
                         raise ValueError("Unsupported unit")
                     horizon_value, horizon_unit = hv, unit_map[unit]
-                    ticker = prompt_ticker() if not args.demo and not args.use_sample_data else "TSLA"
                 except Exception:
-                    print("Invalid --horizon format. Falling back to interactive prompt.")
-                    ticker = prompt_ticker()
-                    horizon_value, horizon_unit = prompt_horizon()
+                    print("Invalid --horizon format. Using default 10 days.")
+                    horizon_value, horizon_unit = 10.0, "day"
             else:
-                ticker = prompt_ticker()
                 horizon_value, horizon_unit = prompt_horizon()
         else:
-            # EDA-only mode: just ask for ticker, skip horizon prompts.
-            ticker = prompt_ticker()
+            # EDA-only mode: use default horizon
             horizon_value, horizon_unit = 10.0, "day"
 
     # If we're saving outputs, clean once up-front (avoid deleting EDA outputs later)
@@ -407,7 +367,7 @@ def main():
             if args.use_sample_data or args.cache_only:
                 # Get price from first data load
                 test_hs = compute_horizon_settings(10.0, "day")
-                test_data = load_series_for_horizon(ticker, test_hs, fred_api_key, 
+                test_data = load_series_for_horizon(ticker, test_hs, 
                                                    extra_history_period=args.extra_history, 
                                                    use_sample_data=args.use_sample_data,
                                                    cache_only=args.cache_only)
@@ -432,7 +392,7 @@ def main():
             
             try:
                 artifacts = run_single_forecast(ticker, horizon_value, horizon_unit, args, 
-                                                fred_api_key, current_price)
+                                                current_price)
                 
                 if "error" in artifacts:
                     print(f"⚠ Error for {horizon_label}: {artifacts['error']}")
@@ -449,7 +409,6 @@ def main():
                     data = load_series_for_horizon(
                         ticker,
                         horizon_settings,
-                        fred_api_key,
                         extra_history_period=args.extra_history,
                         use_sample_data=args.use_sample_data,
                         cache_only=args.cache_only,
@@ -474,6 +433,7 @@ def main():
                             horizon_suffix=horizon_safe,
                             raw_prices=raw_prices,
                             sigma_daily_forecast=artifacts.get("sigma_daily_forecast"),
+                            sigma_fitted=artifacts.get("sigma_fitted"),
                         )
                         if vol_path:
                             all_saved_paths.append(vol_path)
@@ -549,7 +509,6 @@ def main():
     data = load_series_for_horizon(
         ticker,
         horizon_settings,
-        fred_api_key,
         extra_history_period=args.extra_history,
         use_sample_data=args.use_sample_data,
         cache_only=args.cache_only,
@@ -742,18 +701,6 @@ def main():
     
     print("\n" + "="*70)
 
-    # News (delegated to local function)
-    articles = fetch_news_for_ticker(ticker, api_key)
-    if not api_key or api_key.strip() == "":
-        print("\n News feature disabled (no API key provided).\n")
-    elif not articles:
-        print("\n No recent news articles found or failed to fetch news.\n")
-    else:
-        print(f"\nRecent news articles about {ticker}:\n")
-        for article in articles[:5]:
-            print(f"Title: {article.get('title')}")
-            print(f"Description: {article.get('description')}\n")
-
     # Clean old results for this ticker before generating new ones
     if args.save_plot:
         clean_old_results(ticker)
@@ -778,6 +725,7 @@ def main():
             save=args.save_plot,
             raw_prices=raw_prices,
             sigma_daily_forecast=artifacts.get("sigma_daily_forecast"),
+            sigma_fitted=artifacts.get("sigma_fitted"),
         )
         if vol_path:
             saved_paths.append(vol_path)

@@ -180,7 +180,6 @@ def build_exog(
     download_period: str,
     interval: str,
     mode: str,
-    fred_api_key: Optional[str] = None,
 ) -> pd.DataFrame:
     """Build exogenous feature DataFrame for forecasting models.
     
@@ -190,7 +189,6 @@ def build_exog(
         download_period: Download period string
         interval: Data interval
         mode: Resampling mode ('D', 'W', 'M')
-        fred_api_key: Optional FRED API key for macro data
     
     Returns:
         DataFrame with exogenous features aligned to price index.
@@ -225,7 +223,6 @@ def build_exog(
 def load_series_for_horizon(
 	ticker: str,
 	horizon_settings: Dict[str, object],
-	fred_api_key: Optional[str] = None,
 	extra_history_period: Optional[str] = None,
 	use_sample_data: bool = False,
 	cache_only: bool = False,
@@ -325,7 +322,7 @@ def load_series_for_horizon(
 		# Use 'MS' (month start) for pandas 2.2+ compatibility
 		prices = prices.resample("MS").last().dropna()
 
-	exog_df = build_exog(prices, volume, horizon_settings["download_period"], horizon_settings["interval"], horizon_settings["mode"], fred_api_key)
+	exog_df = build_exog(prices, volume, horizon_settings["download_period"], horizon_settings["interval"], horizon_settings["mode"])
 
 	# log returns (aligned to resampled prices)
 	if prices.empty:

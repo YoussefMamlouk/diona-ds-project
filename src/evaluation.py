@@ -335,17 +335,19 @@ def generate_forecast(
         forecast_returns = np.full(forecast_steps, drift_full)
 
     # Step 5: Adjust forecast for long horizons
-    # ARIMA mean-reverts to ~0 which can lead to overly flat price paths at longer horizons.
+    # ARIMA and AR1 models mean-revert to ~0 which can lead to overly optimistic or flat forecasts at longer horizons.
     # For long horizons, use historical drift (expected value) for the point forecast.
     horizon_days = horizon_settings.get("invested_days", forecast_steps * 30)  # Approximate if not available
     mode = horizon_settings.get("mode", "D")
     is_long_horizon = (
         horizon_days >= 180 or  # 6+ months in any mode (6 months = 126 days, but we want to include it)
         forecast_steps > 20 or  # Long daily/weekly forecasts
-        (mode == "M" and forecast_steps >= 6)  # Monthly: 6 months (6 steps) or longer
+        (mode == "M" and forecast_steps >= 3)  # Monthly: 3 months (3 steps) or longer - AR1/ARIMA can be unreliable
     )
     
-    if best_model_name == "arima" and is_long_horizon:
+    # Apply drift-based adjustment for ARIMA and AR1 models on long horizons
+    # AR1 models are known to perform poorly on longer horizons (see comment at line 110)
+    if best_model_name in ("arima", "ar1") and is_long_horizon:
         adjusted_returns = np.full(forecast_steps, drift_full)
     else:
         adjusted_returns = forecast_returns
@@ -422,14 +424,197 @@ def generate_forecast(
     garch = arch_model(returns, vol="Garch", p=1, q=1, dist="normal")
     garch_fit = garch.fit(disp="off")
 
+    # In-sample conditional volatility from the fitted GARCH model (same frequency as training).
+    # returns are in percent => conditional_volatility is also in percent (daily).
+    # Convert to annualized percent for plotting consistency.
+    sigma_fitted: Optional[pd.Series] = None
+    try:
+        if hasattr(garch_fit, "conditional_volatility"):
+            cond_vol = garch_fit.conditional_volatility
+            cond_vol_arr = np.asarray(cond_vol, dtype=float)
+            sigma_fitted = (
+                pd.Series(cond_vol_arr, index=returns.index)
+                .replace([np.inf, -np.inf], np.nan)
+                .dropna()
+                * np.sqrt(252.0)
+            )
+    except Exception:
+        sigma_fitted = None
+
     # Forecast DAILY variance for the full horizon in business-day units.
     garch_forecast = garch_fit.forecast(horizon=horizon_days)
-    daily_var_pct2 = garch_forecast.variance.values[-1, :]  # (% return)^2 per day
+    
+    # Extract variance forecast correctly
+    # The arch library's forecast.variance returns conditional variance forecasts
+    # It's typically a DataFrame with shape (1, horizon) where columns are forecast steps
+    variance_data = garch_forecast.variance
+    
+    # Convert to numpy array, handling DataFrame or array input
+    if hasattr(variance_data, 'values'):
+        var_array = variance_data.values
+    elif hasattr(variance_data, 'iloc'):
+        var_array = variance_data.iloc[:, :].values
+    else:
+        var_array = np.asarray(variance_data)
+    
+    # Flatten to 1D and extract the forecast horizon
+    var_flat = var_array.flatten()
+    
+    # The forecast should have horizon_days values
+    # If it's a 2D array (1, horizon_days), take the first row
+    # If it's already 1D with horizon_days elements, use it directly
+    if var_array.ndim == 2:
+        if var_array.shape[0] == 1:
+            daily_var_pct2 = var_array[0, :]
+        elif var_array.shape[1] == 1:
+            daily_var_pct2 = var_array[:, 0]
+        else:
+            # Take diagonal or first row
+            daily_var_pct2 = np.diag(var_array) if var_array.shape[0] == var_array.shape[1] else var_array[0, :]
+    else:
+        daily_var_pct2 = var_flat
+    
     daily_var_pct2 = np.asarray(daily_var_pct2, dtype=float)
+    
+    # Ensure we have variation in the forecast
+    # GARCH(1,1) forecasts should decay from current conditional variance to unconditional variance
+    if len(daily_var_pct2) > 1:
+        # Check if forecast is too flat (all values nearly identical)
+        if np.std(daily_var_pct2) < 1e-6 or np.allclose(daily_var_pct2, daily_var_pct2[0], rtol=1e-5):
+            # Reconstruct forecast manually using GARCH dynamics
+            # Get current conditional variance
+            try:
+                if hasattr(garch_fit, 'conditional_volatility'):
+                    cond_vol = garch_fit.conditional_volatility
+                    if hasattr(cond_vol, 'iloc'):
+                        current_cond_var = float(cond_vol.iloc[-1] ** 2)
+                    else:
+                        current_cond_var = float(cond_vol[-1] ** 2)
+                else:
+                    # Use recent realized variance
+                    current_cond_var = float(returns.iloc[-min(21, len(returns)):].var())
+            except Exception:
+                current_cond_var = float(daily_var_pct2[0]) if len(daily_var_pct2) > 0 else float(returns.var())
+            
+            # Get unconditional variance
+            try:
+                unconditional_var = float(garch_fit.unconditional_variance)
+            except Exception:
+                # Estimate from long-term average variance
+                unconditional_var = float(returns.rolling(window=min(252, len(returns))).var().dropna().mean())
+            
+            # GARCH(1,1) variance forecast decays exponentially to unconditional variance
+            # h_t = omega + alpha * eps^2_{t-1} + beta * h_{t-1}
+            # Long-term forecast: h_inf = omega / (1 - alpha - beta)
+            # The forecast decays as: h_t = unconditional_var + (current_var - unconditional_var) * (alpha + beta)^t
+            try:
+                params = garch_fit.params
+                # Try different parameter name formats used by arch library
+                alpha = None
+                beta = None
+                if 'alpha[1]' in params.index:
+                    alpha = float(params['alpha[1]'])
+                elif 'alpha' in params.index:
+                    alpha = float(params['alpha'])
+                if 'beta[1]' in params.index:
+                    beta = float(params['beta[1]'])
+                elif 'beta' in params.index:
+                    beta = float(params['beta'])
+                
+                if alpha is not None and beta is not None:
+                    persistence = alpha + beta
+                else:
+                    # Estimate persistence from the forecast itself if available
+                    if len(daily_var_pct2) > 1 and daily_var_pct2[0] != daily_var_pct2[-1]:
+                        # Estimate decay rate from first to last value
+                        ratio = daily_var_pct2[-1] / daily_var_pct2[0] if daily_var_pct2[0] > 0 else 1.0
+                        persistence = ratio ** (1.0 / max(1, horizon_days - 1))
+                    else:
+                        persistence = 0.95  # Default decay rate
+            except Exception:
+                persistence = 0.95  # Default decay rate
+            
+            # Create decaying forecast
+            t = np.arange(horizon_days)
+            decay = persistence ** t
+            daily_var_pct2 = unconditional_var + (current_cond_var - unconditional_var) * decay
+
+    # Sanitize variance forecast: replace non-finite values, fill gaps, and clip at 0
+    daily_var_pct2 = np.asarray(daily_var_pct2, dtype=float)
+    daily_var_pct2[~np.isfinite(daily_var_pct2)] = np.nan
+    if daily_var_pct2.size == 0:
+        daily_var_pct2 = np.full(horizon_days, np.nan, dtype=float)
+    if np.all(np.isnan(daily_var_pct2)):
+        # Fallback: realized variance from recent history (units: percent^2)
+        fallback_var = float(np.nanvar(returns.iloc[-min(252, len(returns)):]))
+        daily_var_pct2 = np.full(horizon_days, fallback_var, dtype=float)
+    else:
+        daily_var_pct2 = (
+            pd.Series(daily_var_pct2)
+            .ffill()
+            .bfill()
+            .to_numpy(dtype=float)
+        )
+    daily_var_pct2 = np.maximum(daily_var_pct2, 0.0)
+
+    # Create a stochastic daily variance path (percent^2) using GARCH recursion so the
+    # forecast looks like a continuation (not a deterministic straight line).
+    daily_var_path_pct2: Optional[np.ndarray] = None
+    try:
+        params = garch_fit.params
+        def _param(name: str, default: float) -> float:
+            try:
+                if hasattr(params, "index") and name in params.index:
+                    return float(params[name])
+                if isinstance(params, dict) and name in params:
+                    return float(params[name])
+            except Exception:
+                pass
+            return float(default)
+
+        omega = _param("omega", 0.0)
+        alpha = _param("alpha[1]", _param("alpha", 0.1))
+        beta = _param("beta[1]", _param("beta", 0.85))
+        persistence = alpha + beta
+        if not np.isfinite(persistence) or persistence <= 0:
+            alpha, beta = 0.1, 0.85
+        if alpha + beta >= 0.999:
+            # keep it stable-ish
+            beta = min(beta, 0.998)
+            alpha = min(alpha, 0.998 - beta)
+
+        # Start from last conditional variance (percent^2)
+        try:
+            if hasattr(garch_fit, "conditional_volatility"):
+                cv = garch_fit.conditional_volatility
+                last_cv = float(cv.iloc[-1] if hasattr(cv, "iloc") else cv[-1])
+                h = max(last_cv * last_cv, 0.0)
+            else:
+                h = float(np.nanvar(returns.iloc[-min(252, len(returns)):]))
+        except Exception:
+            h = float(np.nanvar(returns))
+
+        rng = np.random.default_rng(42)
+        path = np.empty(horizon_days, dtype=float)
+        for t in range(horizon_days):
+            z = float(rng.standard_normal())
+            eps = np.sqrt(max(h, 0.0)) * z
+            h = omega + alpha * (eps ** 2) + beta * h
+            if not np.isfinite(h) or h < 0:
+                h = float(np.nanmean(daily_var_pct2)) if np.isfinite(np.nanmean(daily_var_pct2)) else 0.0
+            path[t] = h
+        daily_var_path_pct2 = path
+    except Exception:
+        daily_var_path_pct2 = None
+    
+    # Ensure we have the right length
     if daily_var_pct2.size < horizon_days:
-        # defensive: pad with last value
+        # Pad with last value (GARCH converges to unconditional variance)
         pad = np.full(horizon_days - daily_var_pct2.size, float(daily_var_pct2[-1]) if daily_var_pct2.size else 0.0)
         daily_var_pct2 = np.concatenate([daily_var_pct2, pad])
+    elif daily_var_pct2.size > horizon_days:
+        # Trim to horizon_days
+        daily_var_pct2 = daily_var_pct2[:horizon_days]
 
     # Aggregate daily variance into each forecast "step" (day/week/month).
     # - period_std_decimal is used for Monte Carlo shocks (consistent with step frequency)
@@ -439,29 +624,33 @@ def generate_forecast(
     for i in range(forecast_steps):
         a = i * days_per_step
         b = min((i + 1) * days_per_step, horizon_days)
-        chunk = daily_var_pct2[a:b]
+        var_for_points = daily_var_path_pct2 if daily_var_path_pct2 is not None else daily_var_pct2
+        chunk = var_for_points[a:b]
         if chunk.size == 0:
-            chunk = daily_var_pct2[-1:]
+            chunk = var_for_points[-1:]
         # Convert daily %^2 -> daily decimal variance
         daily_var_dec = (chunk / (100.0 ** 2))
-        period_var_dec = float(np.sum(daily_var_dec))  # variance adds over days
+        period_var_dec = float(np.nansum(daily_var_dec))  # variance adds over days
         period_std_decimal.append(float(np.sqrt(max(period_var_dec, 0.0))))
 
-        mean_daily_var_dec = float(np.mean(daily_var_dec))
+        mean_daily_var_dec = float(np.nanmean(daily_var_dec))
+        if not np.isfinite(mean_daily_var_dec):
+            mean_daily_var_dec = 0.0
         sigma_ann_pct.append(float(np.sqrt(max(mean_daily_var_dec, 0.0) * 252.0) * 100.0))
 
     period_std_decimal = np.asarray(period_std_decimal, dtype=float)
     sigma_forecast = pd.Series(sigma_ann_pct, index=future_dates)
 
     # Also keep a daily-resolution volatility forecast for plotting (annualized %).
-    # This prevents monthly/weekly horizons from looking like a "straight line" with only a few markers.
+    # Use the stochastic path when available to avoid a deterministic straight line.
     try:
         start_daily = pd.Timestamp(daily_prices.index[-1]) + pd.offsets.BDay()
         daily_future_dates = pd.bdate_range(start=start_daily, periods=horizon_days)
+        var_for_daily = daily_var_path_pct2 if daily_var_path_pct2 is not None else daily_var_pct2
         sigma_daily_forecast = pd.Series(
-            np.sqrt(np.maximum(daily_var_pct2[:horizon_days], 0.0)) * np.sqrt(252.0),
+            np.sqrt(np.maximum(np.asarray(var_for_daily[:horizon_days], dtype=float), 0.0)) * np.sqrt(252.0),
             index=daily_future_dates,
-        )
+        ).replace([np.inf, -np.inf], np.nan).dropna()
     except Exception:
         sigma_daily_forecast = None
 
@@ -514,6 +703,7 @@ def generate_forecast(
         "signal_quality": signal_quality,
         "sigma_forecast": sigma_forecast,
         "sigma_daily_forecast": sigma_daily_forecast,
+        "sigma_fitted": sigma_fitted,
         "last_price": last_price,
         "forecast_returns": forecast_returns,
         "all_metrics": all_metrics,  # Include all metrics for CSV export
@@ -622,6 +812,69 @@ def plot_forecast(ticker: str, prices: pd.Series, raw_prices: pd.Series, forecas
         import hashlib
         return int(hashlib.md5(text.encode("utf-8")).hexdigest()[:8], 16)
 
+    def _simulate_daily_path_for_daily_forecast(
+        start_price: float,
+        start_dt: pd.Timestamp,
+        forecast_dates: pd.DatetimeIndex,
+        forecast_prices: pd.Series,
+        period_sigma_annualized_pct: Optional[pd.Series],
+        seed_text: str,
+    ) -> Optional[pd.Series]:
+        """Simulate a daily path for daily forecasts by adding volatility to each day.
+        
+        This is simpler than the period endpoint matching function and works better
+        for daily forecasts where each period is just one day.
+        """
+        if forecast_dates is None or len(forecast_dates) == 0:
+            return None
+        
+        np.random.seed(_stable_seed_from_text(seed_text))
+        
+        # Generate all business days from start to end of forecast
+        all_days = pd.bdate_range(start=start_dt + pd.offsets.BDay(), end=forecast_dates[-1])
+        if len(all_days) == 0:
+            return None
+        
+        current_price = float(start_price)
+        out_dates = []
+        out_prices = []
+        
+        # Get daily volatility (use first value if available, or average)
+        if period_sigma_annualized_pct is not None and len(period_sigma_annualized_pct) > 0:
+            avg_vol_ann = float(period_sigma_annualized_pct.mean())
+        else:
+            avg_vol_ann = 20.0  # Default 20% annualized volatility
+        
+        sigma_daily = (avg_vol_ann / 100.0) / np.sqrt(252)
+        
+        # Calculate target log return for the full period
+        target_price = float(forecast_prices.iloc[-1])
+        target_lr_total = float(np.log(target_price / start_price))
+        
+        # Distribute the total return across all days with daily volatility
+        n_days = len(all_days)
+        drift_daily = target_lr_total / n_days if n_days > 0 else 0.0
+        
+        # Generate daily returns with volatility
+        daily_shocks = np.random.normal(loc=0.0, scale=sigma_daily, size=n_days)
+        daily_returns = drift_daily + daily_shocks
+        
+        # Brownian-bridge correction to ensure we hit the target price
+        actual_sum = float(daily_returns.sum())
+        if abs(actual_sum - target_lr_total) > 1e-10:
+            correction = (target_lr_total - actual_sum) / n_days
+            daily_returns = daily_returns + correction
+        
+        # Build price path
+        for d, r in zip(all_days, daily_returns):
+            current_price = current_price * float(np.exp(r))
+            out_dates.append(d)
+            out_prices.append(current_price)
+        
+        if not out_dates:
+            return None
+        return pd.Series(out_prices, index=pd.DatetimeIndex(out_dates), name="simulated_daily_path")
+
     def _simulate_daily_path_matching_period_endpoints(
         start_price: float,
         start_dt: pd.Timestamp,
@@ -692,24 +945,52 @@ def plot_forecast(ticker: str, prices: pd.Series, raw_prices: pd.Series, forecas
         return pd.Series(out_prices, index=pd.DatetimeIndex(out_dates), name="simulated_daily_path")
 
     # Decide if we should draw a daily-volatility path (weekly/monthly horizons look linear otherwise)
+    # Also simulate for daily forecasts when returns are constant (e.g., random_walk model)
+    # For short daily forecasts (≤15 days), always simulate to show realistic day-to-day fluctuations
     infer = None
     try:
         infer = pd.infer_freq(forecast_series.index)
     except Exception:
         infer = None
     is_period_horizon = infer in ("MS", "W-FRI") or ("month" in horizon_suffix) or ("year" in horizon_suffix) or ("week" in horizon_suffix)
+    
+    # Check if forecast returns are constant (which would make the plot linear)
+    returns_are_constant = False
+    if forecast_returns is not None:
+        forecast_returns_array = forecast_returns if isinstance(forecast_returns, np.ndarray) else np.array(forecast_returns)
+        returns_are_constant = len(forecast_returns_array) > 0 and np.allclose(forecast_returns_array, forecast_returns_array[0], rtol=1e-10)
+    
+    # Simulate daily volatility for:
+    # 1. Period horizons (weekly/monthly) - always simulate
+    # 2. Daily forecasts with constant returns - simulate to avoid linear appearance
+    # 3. Short daily forecasts (≤15 days) - always simulate to show realistic fluctuations
+    is_daily_forecast = (infer == "B" or infer is None) and not is_period_horizon
+    is_short_daily = is_daily_forecast and forecast_length <= 15
+    should_simulate_daily = is_period_horizon or (is_daily_forecast and (returns_are_constant or is_short_daily))
 
     simulated_daily = None
-    if is_period_horizon:
-        simulated_daily = _simulate_daily_path_matching_period_endpoints(
-            start_price=last_price,
-            start_dt=last_date,
-            period_end_dates=forecast_series.index,
-            period_end_prices=forecast_series,
-            period_log_returns=forecast_returns,
-            period_sigma_annualized_pct=sigma_forecast,
-            seed_text=f"{ticker}|{horizon_suffix}|plot_daily_sim",
-        )
+    if should_simulate_daily:
+        if is_daily_forecast and (returns_are_constant or is_short_daily):
+            # Use simpler daily simulation for daily forecasts (especially when returns are constant or forecast is short)
+            simulated_daily = _simulate_daily_path_for_daily_forecast(
+                start_price=last_price,
+                start_dt=last_date,
+                forecast_dates=forecast_series.index,
+                forecast_prices=forecast_series,
+                period_sigma_annualized_pct=sigma_forecast,
+                seed_text=f"{ticker}|{horizon_suffix}|plot_daily_sim",
+            )
+        else:
+            # Use period endpoint matching for weekly/monthly forecasts
+            simulated_daily = _simulate_daily_path_matching_period_endpoints(
+                start_price=last_price,
+                start_dt=last_date,
+                period_end_dates=forecast_series.index,
+                period_end_prices=forecast_series,
+                period_log_returns=forecast_returns,
+                period_sigma_annualized_pct=sigma_forecast,
+                seed_text=f"{ticker}|{horizon_suffix}|plot_daily_sim",
+            )
 
     # We still need these for confidence bands (defined regardless of plotting branch)
     extended_dates = [last_date] + list(forecast_series.index)
@@ -792,7 +1073,8 @@ def plot_volatility_forecast(
     save: bool = False,
     horizon_suffix: str = "",
     raw_prices: Optional[pd.Series] = None,
-    sigma_daily_forecast: Optional[pd.Series] = None
+    sigma_daily_forecast: Optional[pd.Series] = None,
+    sigma_fitted: Optional[pd.Series] = None
 ) -> Optional[str]:
     """Plot historical volatility vs GARCH forecast.
     
@@ -864,47 +1146,144 @@ def plot_volatility_forecast(
     
     plt.figure(figsize=(12, 6))
     
-    # Plot historical volatility
-    if not rolling_vol.empty:
-        plt.plot(rolling_vol.index, rolling_vol.values, label="Historical Volatility (21-day rolling)", 
-                color="blue", alpha=0.7, linewidth=1.5)
+    # Plot historical volatility:
+    # Prefer the in-sample conditional volatility from the fitted GARCH model (same frequency as training)
+    # when provided; otherwise fall back to rolling realized volatility.
+    hist_label = "Historical Volatility (21-day rolling)"
+    hist_series = rolling_vol
+    if sigma_fitted is not None:
+        try:
+            sigma_fitted_clean = sigma_fitted.replace([np.inf, -np.inf], np.nan).dropna()
+            if len(sigma_fitted_clean) > 10:
+                hist_series = sigma_fitted_clean
+                hist_label = "GARCH Fitted Volatility (in-sample, annualized)"
+        except Exception:
+            pass
+
+    if hist_series is not None and not hist_series.empty:
+        plt.plot(
+            hist_series.index,
+            hist_series.values,
+            label=hist_label,
+            color="blue",
+            alpha=0.75,
+            linewidth=1.6,
+            zorder=2,
+        )
     
     # Plot GARCH forecast:
     # - daily curve (if available) to show shape
     # - period-end markers from sigma_forecast for the specific horizon
     if sigma_daily_forecast is not None and len(sigma_daily_forecast) > 0:
+        sigma_daily_clean = sigma_daily_forecast.replace([np.inf, -np.inf], np.nan).dropna()
+        sigma_points = sigma_forecast.replace([np.inf, -np.inf], np.nan).dropna()
+        if (sigma_points is None or sigma_points.empty) and sigma_daily_clean is not None and not sigma_daily_clean.empty:
+            # Derive horizon points from daily curve if the period series is missing/NaN
+            try:
+                sigma_points = sigma_daily_clean.reindex(sigma_forecast.index, method="ffill").dropna()
+            except Exception:
+                sigma_points = sigma_daily_clean.iloc[:: max(1, int(len(sigma_daily_clean) / max(1, len(sigma_forecast))))].copy()
+
         plt.plot(
-            sigma_daily_forecast.index,
-            sigma_daily_forecast.values,
+            sigma_daily_clean.index,
+            sigma_daily_clean.values,
             label="GARCH(1,1) Forecast (daily, annualized)",
             color="red",
             linewidth=2,
             alpha=0.85,
+            zorder=3,
         )
         plt.plot(
-            sigma_forecast.index,
-            sigma_forecast.values,
+            sigma_points.index,
+            sigma_points.values,
             label="GARCH Forecast (horizon points)",
             color="darkred",
             linewidth=0,
             marker="o",
-            markersize=4,
+            markersize=7,
+            zorder=5,
         )
     else:
+        sigma_points = sigma_forecast.replace([np.inf, -np.inf], np.nan).dropna()
         plt.plot(
-            sigma_forecast.index,
-            sigma_forecast.values,
+            sigma_points.index,
+            sigma_points.values,
             label="GARCH(1,1) Forecast (annualized)",
             color="red",
             linewidth=2,
             marker="o",
-            markersize=4,
+            markersize=6,
+            zorder=4,
         )
     
     # Add vertical line separating historical from forecast
     if not rolling_vol.empty:
         last_hist_date = rolling_vol.index[-1]
         plt.axvline(x=last_hist_date, color="gray", linestyle="--", alpha=0.5, label="Forecast Start")
+    
+    # Set x-axis limits adapted to the forecast horizon
+    # For short horizons (10 days, 1 month), show less history to make forecast visible
+    # For longer horizons, show more history proportionally
+    if not sigma_forecast.empty:
+        forecast_start = sigma_forecast.index[0]
+        forecast_end = sigma_forecast.index[-1]
+        forecast_duration = (forecast_end - forecast_start).days
+        
+        # Handle edge case: if forecast has only one point or duration is 0,
+        # estimate duration from number of steps
+        if forecast_duration <= 0 and len(sigma_forecast) > 1:
+            # Estimate from the frequency of the index
+            try:
+                freq = pd.infer_freq(sigma_forecast.index)
+                if freq and 'D' in freq:
+                    forecast_duration = len(sigma_forecast)  # daily
+                elif freq and 'W' in freq:
+                    forecast_duration = len(sigma_forecast) * 7  # weekly
+                elif freq and 'M' in freq:
+                    forecast_duration = len(sigma_forecast) * 30  # monthly (approx)
+                else:
+                    forecast_duration = len(sigma_forecast) * 30  # default to monthly
+            except Exception:
+                forecast_duration = len(sigma_forecast) * 30  # fallback
+        elif forecast_duration <= 0:
+            forecast_duration = 10  # default for single point forecasts
+        
+        # Determine how much history to show based on forecast horizon
+        # Use a multiplier approach: show N times the forecast duration as history
+        if forecast_duration <= 10:
+            # 10 days: show ~3 months of history (90 days) for better context
+            history_days = 90
+        elif forecast_duration <= 30:
+            # 1 month: show ~4 months of history (120 days) for better context
+            history_days = 120
+        elif forecast_duration <= 90:
+            # 3 months: show ~6 months of history
+            history_days = 180
+        elif forecast_duration <= 180:
+            # 6 months: show ~1 year of history
+            history_days = 365
+        else:
+            # 1 year or more: show ~2 years of history
+            history_days = 730
+        
+        # Calculate x-axis limits
+        xlim_start = forecast_start - pd.Timedelta(days=history_days)
+        xlim_end = forecast_end + pd.Timedelta(days=max(7, forecast_duration // 4))
+        
+        # Ensure we don't go before available historical data
+        # Check both rolling_vol and hist_series (which may be sigma_fitted)
+        earliest_date = None
+        if not rolling_vol.empty:
+            earliest_date = rolling_vol.index[0]
+        if hist_series is not None and not hist_series.empty:
+            hist_start = hist_series.index[0]
+            if earliest_date is None or hist_start < earliest_date:
+                earliest_date = hist_start
+        
+        if earliest_date is not None and xlim_start < earliest_date:
+            xlim_start = earliest_date
+        
+        plt.xlim(xlim_start, xlim_end)
     
     plt.title(f"{ticker} Volatility Forecast: Historical vs GARCH(1,1)")
     plt.xlabel("Date")

@@ -49,7 +49,7 @@ pip install -r requirements.txt
 
 ### Basic Usage
 
-### Simple Usage (Recommended for Grading)
+### Simple Usage
 
 **Simply run the main file with no arguments:**
 
@@ -60,17 +60,14 @@ python main.py
 This automatically runs:
 - **Exploratory Data Analysis (EDA)** with comprehensive plots and insights
 - **Forecasting for all horizons** (10 days, 1 month, 3 months, 6 months, 1 year)
-- Uses **sample data** for reproducibility (deterministic results)
+- Uses **cached TSLA data** from `data/raw/` folder for reproducibility
 - Saves all outputs to the `results/` directory
 
-No prompts, no arguments needed - perfect for grading!
+No prompts, no arguments needed - fully automated!
 
 ### Advanced Usage
 
 ```bash
-# Use real market data instead of sample data
-python main.py --use-real-data
-
 # Run only EDA (skip forecasting)
 python main.py --eda
 
@@ -82,9 +79,6 @@ python main.py --horizon "10 days"      # Short-term
 python main.py --horizon "3 months"    # Medium-term
 python main.py --horizon "1 year"      # Long-term
 
-# Use different ticker (default: TSLA)
-python main.py --ticker AAPL
-
 # Disable ML models (statistical models only)
 python main.py --no-ml
 
@@ -92,18 +86,19 @@ python main.py --no-ml
 python main.py --n-scenarios 1000
 ```
 
+**Note:** The project is configured to use only TSLA (Tesla) data from the `data/raw/` folder for reproducibility. The ticker cannot be changed.
+
 ### Command Line Options
 
-- `--use-real-data` - Use real market data from Yahoo Finance (default: uses sample data for reproducibility)
-- `--use-sample-data` - Use synthetic data (default behavior for reproducibility)
+- `--use-sample-data` - Use synthetic data (for testing, not used by default)
 - `--eda` - Run only EDA analysis
 - `--no-eda` - Skip EDA, only run forecasting
 - `--all-horizons` - Run forecasts for all horizon types (default behavior)
 - `--horizon` - Specify single horizon (e.g., "10 days", "3 months", "1 year")
-- `--ticker` - Stock ticker symbol (default: TSLA)
 - `--n-scenarios` - Number of Monte Carlo scenarios (default: 500)
 - `--no-ml` - Disable XGBoost (statistical models only)
 - `--save` - Save all plots and outputs (default behavior)
+- `--cache-only` - Never download data; rely on cached CSV in data/raw/ (default behavior)
 
 ### Supported Forecast Horizons
 The system supports forecasting for any horizon:
@@ -168,18 +163,17 @@ The project generates the following outputs in the `results/` directory:
 
 ## Data
 
-- **Primary source**: Yahoo Finance (via `yfinance` library)
-- **Automatic caching**: Real data is downloaded once and cached locally in `data/raw/`
-- **Reproducibility**: Cached data ensures consistent results across runs
-- **Offline capability**: After first download, works offline using cached data
-- **Sample data mode**: Use `--use-sample-data` flag for deterministic synthetic data (for testing)
-- No API keys required for basic functionality
+- **Data source**: Cached TSLA (Tesla) data from `data/raw/yfinance_cache_TSLA.csv`
+- **Reproducibility**: The project uses only the pre-saved Tesla data for consistent, reproducible results
+- **Offline capability**: Works entirely offline using cached data - no downloads or API calls
+- **No API keys required**: The project does not use any external APIs or require API keys
+- **Fixed ticker**: The project is configured to work only with TSLA data for reproducibility
 
 ## Project Structure
 
 ```
 .
-├── main.py                 # Main entry point (required for grading)
+├── main.py                 # Main entry point
 ├── src/
 │   ├── data_loader.py     # Data fetching and preprocessing
 │   ├── models.py          # Model implementations (AR(1), ARIMA, XGBoost)
@@ -194,12 +188,14 @@ The project generates the following outputs in the `results/` directory:
 
 ## Reproducibility
 
-All random seeds are set to ensure reproducibility:
-- NumPy: `np.random.seed(42)`
-- XGBoost: `random_state=42`
-- Monte Carlo: `np.random.seed(42)`
-
-Run with `--use-sample-data` for fully deterministic results suitable for grading.
+The project is designed for maximum reproducibility:
+- **Fixed ticker**: Always uses TSLA (Tesla) data from `data/raw/` folder
+- **Cached data only**: Uses pre-saved data, no downloads or API calls
+- **Random seeds**: All random seeds are set to ensure reproducibility:
+  - NumPy: `np.random.seed(42)`
+  - XGBoost: `random_state=42`
+  - Monte Carlo: `np.random.seed(42)`
+- **No user input**: No prompts or interactive elements - fully deterministic execution
 
 ## Key Findings
 

@@ -11,8 +11,8 @@ This project uses financial market data from **Yahoo Finance** via the `yfinance
 - The `yfinance` library handles data retrieval and may cache data internally
 - No data files need to be manually placed in this directory
 
-### Offline Mode (For Grading)
-For offline grading or deterministic results, use the `--use-sample-data` flag:
+### Offline Mode
+For offline use or deterministic results, use the `--use-sample-data` flag:
 
 ```bash
 python main.py --demo --use-sample-data --save
@@ -33,10 +33,10 @@ The `yfinance` library may cache data internally. For explicit caching or to avo
 1. Use the `--use-sample-data` flag for offline/deterministic mode
 2. The library's internal caching reduces redundant downloads
 
-## Notes for Graders
+## Notes
 
 - **No manual data download required**: Data is fetched automatically
-- **Offline mode available**: Use `--use-sample-data` for grading without internet
+- **Offline mode available**: Use `--use-sample-data` for offline use without internet
 - **Reproducible**: Sample data mode produces deterministic results
 - **No API keys needed**: Yahoo Finance data is publicly available
 
@@ -45,7 +45,7 @@ The `yfinance` library may cache data internally. For explicit caching or to avo
 The project automatically caches downloaded data to this directory:
 - Downloaded data is saved as `yfinance_cache_<TICKER>_<HASH>.csv`
 - On subsequent runs, cached data is used automatically (no re-download)
-- This ensures reproducibility and allows offline grading
+- This ensures reproducibility and allows offline use
 - Cache files are created automatically on first download
 
 ## Data Files

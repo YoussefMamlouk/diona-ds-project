@@ -13,7 +13,7 @@ The project explicitly evaluates whether machine learning models (XGBoost) outpe
 
 Data
 ----
-Primary price data is sourced from Yahoo Finance (via `yfinance` library). For robustness and offline grading, the codebase includes a deterministic `--use-sample-data` mode that produces synthetic but reproducible data. Exogenous features include volume, momentum indicators, and rolling historical volatility.
+Primary price data is sourced from Yahoo Finance (via `yfinance` library). For robustness and offline use, the codebase includes a deterministic `--use-sample-data` mode that produces synthetic but reproducible data. Exogenous features include volume, momentum indicators, and rolling historical volatility.
 
 Methods
 -------
@@ -45,7 +45,7 @@ Methods
 
 Deliverables
 ------------
-- Working repository with `python main.py` as the entry point and `--use-sample-data` for offline grading
+- Working repository with `python main.py` as the entry point and `--use-sample-data` for offline use
 - Reproducible environment files (`requirements.txt`, `environment.yml`) with all dependencies
 - Random seeds set everywhere (NumPy, sklearn, XGBoost) for deterministic behavior
 - Model comparison outputs:

@@ -668,11 +668,13 @@ def print_insights(ticker: str, data: pd.DataFrame, prices: pd.Series, returns: 
     print("\n" + "="*70)
     print("  KEY INSIGHTS")
     print("="*70)
+    print("  Analysis Period: 5 years")
+    print("="*70)
     
     # Price insights
     price_change = ((prices.iloc[-1] / prices.iloc[0]) - 1) * 100
     print(f"\n📈 PRICE TRENDS:")
-    print(f"  • Total return over period: {price_change:+.2f}%")
+    print(f"  • Total return over 5 years: {price_change:+.2f}%")
     print(f"  • Current price: ${prices.iloc[-1]:.2f}")
     print(f"  • Price range: ${prices.min():.2f} - ${prices.max():.2f}")
     
@@ -735,6 +737,7 @@ def print_insights(ticker: str, data: pd.DataFrame, prices: pd.Series, returns: 
         print(f"  • ⚠ Returns deviate from normal distribution (common in financial data)")
     
     print("\n" + "="*70 + "\n")
+
 
 
 
