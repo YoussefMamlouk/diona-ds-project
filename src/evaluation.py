@@ -109,6 +109,8 @@ def run_backtest(
     # 2. AR(1) model
     # Note: AR(1) models mean-revert quickly and may perform poorly on long horizons
     try:
+        # Ensure seed is set before AR(1) training
+        np.random.seed(42)
         ar1_model = train_ar1(train_returns, train_exog)
         if val_exog is not None:
             val_exog_array = np.vstack([val_exog.iloc[-1].values] * forecast_periods)
@@ -127,6 +129,8 @@ def run_backtest(
     
     # 3. ARIMA model
     try:
+        # Ensure seed is set before ARIMA fitting
+        np.random.seed(42)
         if model_type == "arima_fixed":
             if has_exog and train_exog is not None:
                 arima_model = ARIMA(train_returns, order=(1, 0, 0), exog=train_exog).fit()
@@ -140,6 +144,8 @@ def run_backtest(
                 forecast_returns = arima_model.forecast(steps=forecast_periods).values
         else:
             # Auto ARIMA
+            # Set random seed before auto_arima for reproducibility
+            np.random.seed(42)
             arima_model = auto_arima(
                 train_returns,
                 exogenous=train_exog if has_exog else None,
@@ -148,6 +154,8 @@ def run_backtest(
                 suppress_warnings=True,
                 stepwise=True,
                 trace=False,
+                random_state=42,  # For reproducibility
+                n_jobs=1,  # Single thread for reproducibility
             )
             if val_exog is not None:
                 val_exog_array = np.vstack([val_exog.iloc[-1].values] * forecast_periods)
@@ -253,6 +261,8 @@ def generate_forecast(
 
     if horizon_settings["mode"] == "D":
         # Short daily horizons: use fixed AR(1) model
+        # Ensure seed is set before ARIMA fitting
+        np.random.seed(42)
         if not exog_df.empty:
             arima_full = ARIMA(log_returns, order=(1, 0, 0), exog=exog_df).fit()
         else:
@@ -260,6 +270,8 @@ def generate_forecast(
         model_type = "arima_fixed"
     else:
         # Longer horizons: auto-select ARIMA order
+        # Set random seed before auto_arima for reproducibility
+        np.random.seed(42)
         arima_full = auto_arima(
             log_returns,
             exogenous=exog_df if not exog_df.empty else None,
@@ -268,6 +280,8 @@ def generate_forecast(
             suppress_warnings=True,
             stepwise=True,
             trace=False,
+            random_state=42,  # For reproducibility
+            n_jobs=1,  # Single thread for reproducibility
         )
         model_type = "auto_arima"
 
@@ -302,6 +316,8 @@ def generate_forecast(
     if best_model_name == "ar1":
         # Use AR(1) model
         try:
+            # Ensure seed is set before AR(1) training
+            np.random.seed(42)
             ar1_model = train_ar1(log_returns, exog_df if has_exog else None)
             exog_future = None
             if not exog_df.empty:
@@ -416,13 +432,17 @@ def generate_forecast(
     except Exception as e:
         raise ImportError(
             "The 'arch' package is required to estimate forward volatility but failed to import.\n"
-            "Install it with: python -m pip install arch==5.2.0\n"
-            "If installation fails on Windows, try: conda install -c conda-forge arch\n"
+            "To install, use conda:\n"
+            "  conda env create -f environment.yml\n"
+            "  conda activate stock-forecast\n"
             "Original import error: %s" % e
         ) from e
 
+    # Set random seed before GARCH fitting for reproducibility
+    np.random.seed(42)
     garch = arch_model(returns, vol="Garch", p=1, q=1, dist="normal")
-    garch_fit = garch.fit(disp="off")
+    # Use deterministic optimization settings
+    garch_fit = garch.fit(disp="off", options={'maxiter': 1000, 'disp': False})
 
     # In-sample conditional volatility from the fitted GARCH model (same frequency as training).
     # returns are in percent => conditional_volatility is also in percent (daily).

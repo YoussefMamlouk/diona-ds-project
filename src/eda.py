@@ -742,3 +742,5 @@ def print_insights(ticker: str, data: pd.DataFrame, prices: pd.Series, returns: 
 
 
 
+
+

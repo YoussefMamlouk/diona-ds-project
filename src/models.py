@@ -29,10 +29,9 @@ def _get_xgb_regressor_class():
     except Exception as e:
         raise ImportError(
             "XGBoost is required for XGB model functions but failed to import.\n"
-            "Recommended fixes:\n"
-            "  1) Try installing the pinned version: python -m pip install xgboost==1.7.6\n"
-            "  2) If pip wheel build fails on Windows, use conda: conda install -c conda-forge xgboost\n"
-            "  3) Or install a prebuilt wheel: python -m pip install --only-binary=:all: xgboost\n"
+            "To install, use conda:\n"
+            "  conda env create -f environment.yml\n"
+            "  conda activate stock-forecast\n"
             f"Original import error: {e}"
         ) from e
 

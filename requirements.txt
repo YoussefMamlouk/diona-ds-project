@@ -1,6 +1,7 @@
-# Python version requirement: Python 3.10.x (must match environment.yml)
-# This project requires Python 3.10 for reproducibility across pip and conda environments.
-# Install with: python3.10 -m pip install -r requirements.txt
+# This file is kept for reference only.
+# This project uses conda exclusively - install dependencies via environment.yml:
+#   conda env create -f environment.yml
+#   conda activate stock-forecast
 
 numpy==1.26.4
 pandas==2.2.3

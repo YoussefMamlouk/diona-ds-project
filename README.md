@@ -28,22 +28,17 @@ This project implements and compares multiple forecasting models to predict fina
 ## Setup
 
 ### Prerequisites
-- Python 3.10 or higher
-- Conda (recommended) or pip
+- Conda (required)
 
 ### Installation
 
-**Using Conda (Recommended):**
+**Using Conda:**
 ```bash
 conda env create -f environment.yml
-conda init
 conda activate stock-forecast
 ```
 
-**Using pip:**
-```bash
-pip install -r requirements.txt
-```
+This automatically installs Python 3.10.0 and all dependencies.
 
 ## Usage
 
@@ -182,8 +177,7 @@ The project generates the following outputs in the `results/` directory:
 │   └── raw/               # Raw data storage
 ├── results/               # Generated outputs (plots, CSVs)
 ├── notebooks/             # Exploratory notebooks
-├── environment.yml        # Conda environment file
-└── requirements.txt       # pip requirements file
+└── environment.yml        # Conda environment file
 ```
 
 ## Reproducibility
@@ -191,11 +185,16 @@ The project generates the following outputs in the `results/` directory:
 The project is designed for maximum reproducibility:
 - **Fixed ticker**: Always uses TSLA (Tesla) data from `data/raw/` folder
 - **Cached data only**: Uses pre-saved data, no downloads or API calls
-- **Pinned package versions**: All package versions are pinned to exact versions in both `requirements.txt` and `environment.yml` to ensure consistent results across devices
+- **Pinned package versions**: All package versions are pinned to exact versions in `environment.yml` to ensure consistent results across devices
 - **Random seeds**: All random seeds are set to ensure reproducibility:
-  - NumPy: `np.random.seed(42)`
+  - NumPy: `np.random.seed(42)` (set before all model training)
   - XGBoost: `random_state=42`
+  - Auto ARIMA: `random_state=42, n_jobs=1`
   - Monte Carlo: `np.random.seed(42)`
+  - GARCH fitting: seed set before optimization
+- **Environment variables**: Set for numerical reproducibility:
+  - `PYTHONHASHSEED=0` for hash-based operations
+  - `OMP_NUM_THREADS=1` and related threading vars for single-threaded BLAS
 - **No user input**: No prompts or interactive elements - fully deterministic execution
 
 ### Verifying Package Versions
@@ -206,42 +205,33 @@ To ensure your environment matches the expected versions, run:
 python verify_versions.py
 ```
 
-This script checks that all installed packages match the pinned versions in `requirements.txt` and `environment.yml`.
+This script checks that all installed packages match the pinned versions in `environment.yml`.
 
 ### Setting Up the Environment
 
-**⚠️ IMPORTANT: This project requires Python 3.10 for reproducibility.**
+**⚠️ IMPORTANT: This project requires Python 3.10.0 for reproducibility.**
 
-Both pip and conda environments must use Python 3.10 to ensure identical results across devices.
-
-**Using conda (Recommended):**
+**Using conda:**
 ```bash
 conda env create -f environment.yml
 conda activate stock-forecast
 ```
-This automatically installs Python 3.10 and all dependencies.
 
-**Using pip:**
-```bash
-# Make sure you're using Python 3.10
-python3.10 -m pip install -r requirements.txt
-
-# Or use the setup script which checks Python version
-./setup.sh
-```
+This automatically installs Python 3.10.0 and all dependencies as specified in `environment.yml`.
 
 **Verifying your environment:**
 ```bash
 python verify_versions.py
 ```
-This script checks that:
-- Python version is 3.10.x
-- All package versions match the pinned versions
 
-**Why Python 3.10?**
-- Ensures identical results between pip and conda installations
-- Matches the version specified in `environment.yml`
+This script checks that:
+- Python version is exactly 3.10.0
+- All package versions match the pinned versions in `environment.yml`
+
+**Why Python 3.10.0?**
+- Matches the exact version specified in `environment.yml`
 - Prevents version-related discrepancies in numerical computations
+- Ensures maximum reproducibility across all devices
 
 ## Key Findings
 

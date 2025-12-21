@@ -1,14 +1,15 @@
 #!/usr/bin/env python
 """
 Script to verify that installed package versions match the pinned versions
-in requirements.txt and environment.yml.
+in environment.yml.
 
 Run this script to ensure reproducibility across different devices.
+This project uses conda exclusively for package management.
 """
 import sys
 import importlib
 
-# Expected versions from requirements.txt/environment.yml
+# Expected versions from environment.yml
 EXPECTED_VERSIONS = {
     'numpy': '1.26.4',
     'pandas': '2.2.3',
@@ -50,15 +51,18 @@ def main():
     python_version = sys.version_info
     expected_python_major = 3
     expected_python_minor = 10
+    expected_python_micro = 0
     
     python_ok = (python_version.major == expected_python_major and 
-                 python_version.minor == expected_python_minor)
+                 python_version.minor == expected_python_minor and
+                 python_version.micro == expected_python_micro)
     
     if python_ok:
-        print(f"✓ Python version: {sys.version.split()[0]} (expected 3.10.x)")
+        print(f"✓ Python version: {sys.version.split()[0]} (expected 3.10.0)")
     else:
-        print(f"⚠️  Python version: {sys.version.split()[0]} (expected 3.10.x)")
-        print(f"   For reproducibility, use Python 3.10 as specified in environment.yml")
+        current_version = f"{python_version.major}.{python_version.minor}.{python_version.micro}"
+        print(f"⚠️  Python version: {current_version} (expected 3.10.0)")
+        print(f"   For reproducibility, use Python 3.10.0 as specified in environment.yml")
     
     print()
     
@@ -88,20 +92,18 @@ def main():
         for pkg, expected, installed in mismatches:
             print(f"   {pkg}: expected {expected}, got {installed}")
         print("\nTo fix, run:")
-        print("   pip install -r requirements.txt")
-        print("   or")
         print("   conda env update -f environment.yml")
         return 1
     
     if not missing and not mismatches and python_ok:
         print("✓ All package versions match expected versions!")
-        print("✓ Python version is correct (3.10.x)")
+        print("✓ Python version is correct (3.10.0)")
         print("  Your environment is consistent and reproducible.")
         return 0
     elif not missing and not mismatches:
         print("✓ All package versions match expected versions!")
         print("⚠️  Python version mismatch - results may differ from conda environment")
-        print("   To fix: Use Python 3.10 (conda env create -f environment.yml)")
+        print("   To fix: Use Python 3.10.0 (conda env create -f environment.yml)")
         return 1
     
     return 1

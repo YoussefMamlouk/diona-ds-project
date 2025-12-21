@@ -4,6 +4,14 @@ import sys
 import warnings
 from typing import Tuple, Dict
 
+# Set environment variables for reproducibility BEFORE importing numerical libraries
+os.environ['PYTHONHASHSEED'] = '0'  # For hash-based operations
+os.environ['OMP_NUM_THREADS'] = '1'  # For OpenMP (BLAS) - single thread for reproducibility
+os.environ['OPENBLAS_NUM_THREADS'] = '1'  # OpenBLAS
+os.environ['MKL_NUM_THREADS'] = '1'  # Intel MKL
+os.environ['NUMEXPR_NUM_THREADS'] = '1'  # NumExpr
+os.environ['VECLIB_MAXIMUM_THREADS'] = '1'  # macOS Accelerate framework
+
 import numpy as np
 import yfinance as yf
 import argparse
