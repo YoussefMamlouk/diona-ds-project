@@ -57,6 +57,10 @@ def train_xgb_cv(log_returns: pd.Series, exog_df: Optional[pd.DataFrame], lags: 
     X, y = make_design(log_returns, aligned_exog)
     if len(y) < max(20, lags + 1):
         return None
+    
+    # Set seed before XGBoost operations for reproducibility
+    np.random.seed(42)
+    
     tscv = TimeSeriesSplit(n_splits=n_splits)
     best_score = float("inf")
     best_model = None
@@ -69,14 +73,20 @@ def train_xgb_cv(log_returns: pd.Series, exog_df: Optional[pd.DataFrame], lags: 
         for train_idx, val_idx in tscv.split(X):
             X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
             y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
+            
+            # Set seed before each model creation for reproducibility
+            np.random.seed(42)
             model = XGBCls(
                 n_estimators=300,
                 max_depth=params["max_depth"],
                 learning_rate=params["learning_rate"],
-                subsample=0.8,
-                colsample_bytree=0.8,
+                subsample=1.0,  # Changed from 0.8 to 1.0 for full determinism
+                colsample_bytree=1.0,  # Changed from 0.8 to 1.0 for full determinism
                 objective="reg:squarederror",
                 random_state=42,
+                tree_method='hist',  # Deterministic tree construction
+                n_jobs=1,  # Single thread for reproducibility
+                deterministic=True,  # For XGBoost 2.x deterministic behavior
             )
             model.fit(X_tr, y_tr)
             preds = model.predict(X_val)
@@ -85,14 +95,19 @@ def train_xgb_cv(log_returns: pd.Series, exog_df: Optional[pd.DataFrame], lags: 
         if mean_cv < best_score:
             best_score = mean_cv
             # refit on full data
+            # Set seed before refit for reproducibility
+            np.random.seed(42)
             best_model = XGBCls(
                 n_estimators=300,
                 max_depth=params["max_depth"],
                 learning_rate=params["learning_rate"],
-                subsample=0.8,
-                colsample_bytree=0.8,
+                subsample=1.0,  # Changed from 0.8 to 1.0 for full determinism
+                colsample_bytree=1.0,  # Changed from 0.8 to 1.0 for full determinism
                 objective="reg:squarederror",
                 random_state=42,
+                tree_method='hist',  # Deterministic tree construction
+                n_jobs=1,  # Single thread for reproducibility
+                deterministic=True,  # For XGBoost 2.x deterministic behavior
             )
             best_model.fit(X, y)
     return best_model
@@ -120,14 +135,19 @@ def forecast_with_xgb(log_returns: pd.Series, exog_df: Optional[pd.DataFrame], s
     if len(y_train) < max(20, lags + 1):
         return None
     if model is None:
+        # Set seed before training for reproducibility
+        np.random.seed(42)
         model = XGBCls(
             n_estimators=300,
             max_depth=3,
             learning_rate=0.05,
-            subsample=0.8,
-            colsample_bytree=0.8,
+            subsample=1.0,  # Changed from 0.8 to 1.0 for full determinism
+            colsample_bytree=1.0,  # Changed from 0.8 to 1.0 for full determinism
             objective="reg:squarederror",
             random_state=42,
+            tree_method='hist',  # Deterministic tree construction
+            n_jobs=1,  # Single thread for reproducibility
+            deterministic=True,  # For XGBoost 2.x deterministic behavior
         )
         model.fit(X_train, y_train)
     history = list(log_returns.values)

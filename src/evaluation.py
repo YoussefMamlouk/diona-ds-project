@@ -176,6 +176,8 @@ def run_backtest(
         try:
             from .models import forecast_with_xgb, train_xgb_cv
             
+            # Set seed before XGBoost training for reproducibility
+            np.random.seed(42)
             xgb_model = train_xgb_cv(train_returns, train_exog)
             if xgb_model is not None:
                 # Use validation data for forecasting context
@@ -340,6 +342,8 @@ def generate_forecast(
     elif best_model_name == "xgb" and use_ml:
         try:
             from .models import train_xgb_cv
+            # Set seed before XGBoost training for reproducibility
+            np.random.seed(42)
             xgb_model = train_xgb_cv(log_returns, exog_df if has_exog else None)
             if xgb_model is not None:
                 forecast_returns = forecast_with_xgb(log_returns, exog_df if has_exog else None, forecast_steps, model=xgb_model)
