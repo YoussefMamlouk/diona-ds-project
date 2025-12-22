@@ -49,7 +49,9 @@ def run_backtest(
     
     Returns:
         Tuple of (best_model_name, best_mape, signal_quality, all_metrics_dict)
-        where all_metrics_dict contains RMSE, MAE, MAPE for each model
+        where all_metrics_dict contains RMSE, MAE, MAPE for each model.
+        Best model is selected based on RMSE (lowest RMSE wins).
+        MAPE is still returned for signal quality assessment and reporting.
     """
     # Set random seed for reproducibility
     np.random.seed(42)
@@ -99,9 +101,9 @@ def run_backtest(
     try:
         drift = float(train_returns.mean())
         forecast_returns = np.full(forecast_periods, drift)
-        last_price = val_prices.iloc[-1]
+        last_price = train_prices.iloc[-1]  # Start forecast from end of train set
         forecast_prices = last_price * np.exp(np.cumsum(forecast_returns))
-        actual_prices = test_prices.iloc[:forecast_periods].values
+        actual_prices = val_prices.iloc[:forecast_periods].values  # Compare to validation set
         all_metrics["random_walk"] = calculate_metrics(forecast_prices, actual_prices)
     except Exception:
         pass
@@ -112,14 +114,15 @@ def run_backtest(
         # Ensure seed is set before AR(1) training
         np.random.seed(42)
         ar1_model = train_ar1(train_returns, train_exog)
-        if val_exog is not None:
-            val_exog_array = np.vstack([val_exog.iloc[-1].values] * forecast_periods)
+        if train_exog is not None and not train_exog.empty:
+            # Use last exogenous value from train set (not validation set) to avoid data leakage
+            train_exog_array = np.vstack([train_exog.iloc[-1].values] * forecast_periods)
         else:
-            val_exog_array = None
-        forecast_returns = forecast_ar1(ar1_model, forecast_periods, val_exog_array)
-        last_price = val_prices.iloc[-1]
+            train_exog_array = None
+        forecast_returns = forecast_ar1(ar1_model, forecast_periods, train_exog_array)
+        last_price = train_prices.iloc[-1]  # Start forecast from end of train set
         forecast_prices = last_price * np.exp(np.cumsum(forecast_returns))
-        actual_prices = test_prices.iloc[:forecast_periods].values
+        actual_prices = val_prices.iloc[:forecast_periods].values  # Compare to validation set
         metrics = calculate_metrics(forecast_prices, actual_prices)
         # Only include if MAPE is reasonable (<100% to avoid extreme failures)
         if metrics["MAPE"] < 100:
@@ -134,11 +137,9 @@ def run_backtest(
         if model_type == "arima_fixed":
             if has_exog and train_exog is not None:
                 arima_model = ARIMA(train_returns, order=(1, 0, 0), exog=train_exog).fit()
-                if val_exog is not None:
-                    val_exog_array = np.vstack([val_exog.iloc[-1].values] * forecast_periods)
-                    forecast_returns = arima_model.forecast(steps=forecast_periods, exog=val_exog_array).values
-                else:
-                    forecast_returns = arima_model.forecast(steps=forecast_periods).values
+                # Use last exogenous value from train set (not validation set) to avoid data leakage
+                train_exog_array = np.vstack([train_exog.iloc[-1].values] * forecast_periods)
+                forecast_returns = arima_model.forecast(steps=forecast_periods, exog=train_exog_array).values
             else:
                 arima_model = ARIMA(train_returns, order=(1, 0, 0)).fit()
                 forecast_returns = arima_model.forecast(steps=forecast_periods).values
@@ -157,15 +158,16 @@ def run_backtest(
                 random_state=42,  # For reproducibility
                 n_jobs=1,  # Single thread for reproducibility
             )
-            if val_exog is not None:
-                val_exog_array = np.vstack([val_exog.iloc[-1].values] * forecast_periods)
-                forecast_returns = forecast_from_arima(arima_model, "auto_arima", forecast_periods, val_exog_array)
+            if train_exog is not None and not train_exog.empty:
+                # Use last exogenous value from train set (not validation set) to avoid data leakage
+                train_exog_array = np.vstack([train_exog.iloc[-1].values] * forecast_periods)
+                forecast_returns = forecast_from_arima(arima_model, "auto_arima", forecast_periods, train_exog_array)
             else:
                 forecast_returns = forecast_from_arima(arima_model, "auto_arima", forecast_periods)
         
-        last_price = val_prices.iloc[-1]
+        last_price = train_prices.iloc[-1]  # Start forecast from end of train set
         forecast_prices = last_price * np.exp(np.cumsum(forecast_returns))
-        actual_prices = test_prices.iloc[:forecast_periods].values
+        actual_prices = val_prices.iloc[:forecast_periods].values  # Compare to validation set
         all_metrics["arima"] = calculate_metrics(forecast_prices, actual_prices)
     except Exception:
         pass
@@ -180,14 +182,12 @@ def run_backtest(
             np.random.seed(42)
             xgb_model = train_xgb_cv(train_returns, train_exog)
             if xgb_model is not None:
-                # Use validation data for forecasting context
-                combined_returns = pd.concat([train_returns, val_returns])
-                combined_exog = pd.concat([train_exog, val_exog]) if train_exog is not None else None
-                forecast_returns = forecast_with_xgb(combined_returns, combined_exog, forecast_periods, model=xgb_model)
+                # Forecast using only train data (validation data should not be used for forecasting context in evaluation)
+                forecast_returns = forecast_with_xgb(train_returns, train_exog, forecast_periods, model=xgb_model)
                 if forecast_returns is not None:
-                    last_price = val_prices.iloc[-1]
+                    last_price = train_prices.iloc[-1]  # Start forecast from end of train set
                     forecast_prices = last_price * np.exp(np.cumsum(forecast_returns))
-                    actual_prices = test_prices.iloc[:forecast_periods].values
+                    actual_prices = val_prices.iloc[:forecast_periods].values  # Compare to validation set
                     metrics = calculate_metrics(forecast_prices, actual_prices)
                     # Only include if MAPE is reasonable (<100% to avoid extreme failures on long horizons)
                     if metrics["MAPE"] < 100:
@@ -198,12 +198,13 @@ def run_backtest(
     if not all_metrics:
         return "random_walk", None, "unknown", {}
     
-    # Find best model based on MAPE (on validation set, but we use test for final comparison)
-    # For model selection, we'd use validation set, but for reporting we use test set
-    best_model = min(all_metrics, key=lambda k: all_metrics[k]["MAPE"])
-    best_mape = all_metrics[best_model]["MAPE"]
+    # Find best model based on RMSE on validation set (correct approach for model selection)
+    # RMSE is used because it penalizes large errors more heavily, which is important for financial forecasting
+    # Models are trained on train set, evaluated on validation set, and test set remains untouched
+    best_model = min(all_metrics, key=lambda k: all_metrics[k]["RMSE"])
+    best_mape = all_metrics[best_model]["MAPE"]  # Keep MAPE for signal quality and reporting (more interpretable)
     
-    # Determine signal quality
+    # Determine signal quality based on MAPE (percentage-based, more interpretable)
     if best_mape < 5:
         signal_quality = "high"
     elif best_mape < 15:
@@ -1371,7 +1372,7 @@ def save_model_comparison_csv(
         })
     
     df = pd.DataFrame(rows)
-    df = df.sort_values("MAPE")  # Sort by MAPE (best first)
+    df = df.sort_values("RMSE")  # Sort by RMSE (best first, consistent with model selection)
     
     # Save to CSV
     results_dir = os.path.join(os.getcwd(), "results")
