@@ -10,7 +10,7 @@ Notes:
   invoked and `xgboost` is missing a clear ImportError with install
   instructions is raised.
 """
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, Literal
 import numpy as np
 import pandas as pd
 from statsmodels.tsa.arima.model import ARIMA
@@ -155,6 +155,145 @@ def forecast_with_xgb(log_returns: pd.Series, exog_df: Optional[pd.DataFrame], s
     feature_cols = list(X_train.columns)
     preds = []
     for _ in range(steps):
+        row = {}
+        for col in feature_cols:
+            if col.startswith("lag_"):
+                lag_idx = int(col.split("_")[1])
+                row[col] = history[-lag_idx]
+            elif exog_last is not None and col in exog_last:
+                row[col] = exog_last[col]
+        input_df = pd.DataFrame([row], columns=feature_cols)
+        next_ret = float(model.predict(input_df)[0])
+        preds.append(next_ret)
+        history.append(next_ret)
+    return np.asarray(preds)
+
+
+def train_linear_cv(
+    log_returns: pd.Series,
+    exog_df: Optional[pd.DataFrame],
+    model_kind: Literal["ridge", "lasso", "elasticnet"],
+    lags: int = 5,
+    n_splits: int = 3,
+):
+    """Train a regularized linear model (Ridge/Lasso/ElasticNet) using simple time-series CV.
+
+    Returns a fitted model, or None when there's not enough data to train.
+    """
+    from sklearn.linear_model import Ridge, Lasso, ElasticNet
+
+    aligned_exog = None
+    if exog_df is not None and not exog_df.empty:
+        aligned_exog = exog_df.reindex(log_returns.index)
+
+    def make_design(series: pd.Series, exog: Optional[pd.DataFrame]):
+        df = pd.DataFrame({"target": series})
+        for i in range(1, lags + 1):
+            df[f"lag_{i}"] = series.shift(i)
+        if exog is not None:
+            for col in exog.columns:
+                df[col] = exog[col]
+        df = df.dropna()
+        y_local = df["target"]
+        X_local = df.drop(columns="target")
+        return X_local, y_local
+
+    X, y = make_design(log_returns, aligned_exog)
+    if len(y) < max(30, lags + 5):
+        return None
+
+    np.random.seed(42)
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+
+    alpha_grid = [0.001, 0.01, 0.1, 1.0, 10.0]
+    l1_ratio_grid = [0.1, 0.5, 0.9]
+
+    best_score = float("inf")
+    best_params = None
+
+    def make_model(alpha: float, l1_ratio: Optional[float] = None):
+        if model_kind == "ridge":
+            return Ridge(alpha=alpha, random_state=None)
+        if model_kind == "lasso":
+            return Lasso(alpha=alpha, max_iter=5000, selection="cyclic", random_state=42)
+        # elasticnet
+        return ElasticNet(alpha=alpha, l1_ratio=float(l1_ratio), max_iter=5000, selection="cyclic", random_state=42)
+
+    for alpha in alpha_grid:
+        if model_kind == "elasticnet":
+            for l1_ratio in l1_ratio_grid:
+                cv_scores = []
+                for train_idx, val_idx in tscv.split(X):
+                    X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
+                    y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
+                    model = make_model(alpha=alpha, l1_ratio=l1_ratio)
+                    model.fit(X_tr, y_tr)
+                    preds = model.predict(X_val)
+                    cv_scores.append(mean_squared_error(y_val, preds))
+                mean_cv = float(np.mean(cv_scores))
+                if mean_cv < best_score:
+                    best_score = mean_cv
+                    best_params = {"alpha": float(alpha), "l1_ratio": float(l1_ratio)}
+        else:
+            cv_scores = []
+            for train_idx, val_idx in tscv.split(X):
+                X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
+                y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
+                model = make_model(alpha=alpha)
+                model.fit(X_tr, y_tr)
+                preds = model.predict(X_val)
+                cv_scores.append(mean_squared_error(y_val, preds))
+            mean_cv = float(np.mean(cv_scores))
+            if mean_cv < best_score:
+                best_score = mean_cv
+                best_params = {"alpha": float(alpha)}
+
+    if not best_params:
+        return None
+
+    # Refit on full data with the best params
+    if model_kind == "elasticnet":
+        model = make_model(alpha=best_params["alpha"], l1_ratio=best_params["l1_ratio"])
+    else:
+        model = make_model(alpha=best_params["alpha"])
+    model.fit(X, y)
+    return model
+
+
+def forecast_with_linear(
+    log_returns: pd.Series,
+    exog_df: Optional[pd.DataFrame],
+    steps: int,
+    model,
+    lags: int = 5,
+) -> Optional[np.ndarray]:
+    """Iterative one-step forecast using a fitted regularized linear model."""
+    aligned_exog = None
+    if exog_df is not None and not exog_df.empty:
+        aligned_exog = exog_df.reindex(log_returns.index)
+
+    def make_design(series: pd.Series, exog: Optional[pd.DataFrame]):
+        df = pd.DataFrame({"target": series})
+        for i in range(1, lags + 1):
+            df[f"lag_{i}"] = series.shift(i)
+        if exog is not None:
+            for col in exog.columns:
+                df[col] = exog[col]
+        df = df.dropna()
+        y_local = df["target"]
+        X_local = df.drop(columns="target")
+        return X_local, y_local
+
+    X_train, y_train = make_design(log_returns, aligned_exog)
+    if len(y_train) < max(30, lags + 5):
+        return None
+
+    history = list(log_returns.values)
+    exog_last = aligned_exog.iloc[-1] if aligned_exog is not None else None
+    feature_cols = list(X_train.columns)
+
+    preds = []
+    for _ in range(int(steps)):
         row = {}
         for col in feature_cols:
             if col.startswith("lag_"):

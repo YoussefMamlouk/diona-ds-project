@@ -7,7 +7,14 @@ This module coordinates the forecasting pipeline by:
 - Generating forecasts with uncertainty quantification via Monte Carlo
 - Adapting to long vs short horizon characteristics
 """
-from .models import forecast_from_arima, forecast_with_xgb, train_ar1, forecast_ar1
+from .models import (
+    forecast_from_arima,
+    forecast_with_xgb,
+    train_ar1,
+    forecast_ar1,
+    train_linear_cv,
+    forecast_with_linear,
+)
 import numpy as np
 import pandas as pd
 from typing import Dict, Optional, Tuple
@@ -29,7 +36,13 @@ def run_backtest(
     model_type: str,
     prices: pd.Series,
     use_ml: bool = True,
-) -> Tuple[str, Optional[float], str, Dict[str, Dict[str, float]]]:
+) -> Tuple[
+    str,
+    Optional[float],
+    str,
+    Dict[str, Dict[str, float]],
+    Dict[str, Dict[str, float]],
+]:
     """Run backtests on multiple models with proper train/validation/test split.
     
     Sets random seed for reproducibility before model training.
@@ -48,10 +61,12 @@ def run_backtest(
         use_ml: Whether to evaluate XGBoost model
     
     Returns:
-        Tuple of (best_model_name, best_mape, signal_quality, all_metrics_dict)
-        where all_metrics_dict contains RMSE, MAE, MAPE for each model.
-        Best model is selected based on RMSE (lowest RMSE wins).
-        MAPE is still returned for signal quality assessment and reporting.
+        Tuple of:
+        - best_model_name
+        - best_test_mape (float)
+        - signal_quality (based on test MAPE)
+        - test_metrics_by_model (RMSE/MAE/MAPE after refit on train+val, scored on test)
+        - val_metrics_by_model (RMSE/MAE/MAPE scored on validation; used for selection)
     """
     # Set random seed for reproducibility
     np.random.seed(42)
@@ -86,8 +101,9 @@ def run_backtest(
     val_exog = exog_df.iloc[train_size:train_size + val_size] if has_exog else None
     test_exog = exog_df.iloc[train_size + val_size:] if has_exog else None
     
-    # Dictionary to store all metrics for all models
-    all_metrics = {}
+    # Metrics dicts
+    val_metrics: Dict[str, Dict[str, float]] = {}
+    test_metrics: Dict[str, Dict[str, float]] = {}
     
     # Helper function to calculate all metrics
     def calculate_metrics(forecast_prices: np.ndarray, actual_prices: np.ndarray) -> Dict[str, float]:
@@ -97,14 +113,17 @@ def run_backtest(
         mape = float(mean_absolute_percentage_error(actual_prices, forecast_prices) * 100)
         return {"RMSE": rmse, "MAE": mae, "MAPE": mape}
     
+    # -----------------------
+    # Validation step: train -> val (used for selection)
+    # -----------------------
     # 1. Random Walk with Drift (baseline)
     try:
         drift = float(train_returns.mean())
         forecast_returns = np.full(forecast_periods, drift)
-        last_price = train_prices.iloc[-1]  # Start forecast from end of train set
-        forecast_prices = last_price * np.exp(np.cumsum(forecast_returns))
-        actual_prices = val_prices.iloc[:forecast_periods].values  # Compare to validation set
-        all_metrics["random_walk"] = calculate_metrics(forecast_prices, actual_prices)
+        start_price = float(train_prices.iloc[-1])
+        forecast_prices = start_price * np.exp(np.cumsum(forecast_returns))
+        actual_prices = val_prices.iloc[:forecast_periods].values
+        val_metrics["random_walk"] = calculate_metrics(forecast_prices, actual_prices)
     except Exception:
         pass
     
@@ -120,13 +139,13 @@ def run_backtest(
         else:
             train_exog_array = None
         forecast_returns = forecast_ar1(ar1_model, forecast_periods, train_exog_array)
-        last_price = train_prices.iloc[-1]  # Start forecast from end of train set
-        forecast_prices = last_price * np.exp(np.cumsum(forecast_returns))
-        actual_prices = val_prices.iloc[:forecast_periods].values  # Compare to validation set
+        start_price = float(train_prices.iloc[-1])
+        forecast_prices = start_price * np.exp(np.cumsum(forecast_returns))
+        actual_prices = val_prices.iloc[:forecast_periods].values
         metrics = calculate_metrics(forecast_prices, actual_prices)
         # Only include if MAPE is reasonable (<100% to avoid extreme failures)
         if metrics["MAPE"] < 100:
-            all_metrics["ar1"] = metrics
+            val_metrics["ar1"] = metrics
     except Exception:
         pass
     
@@ -165,10 +184,10 @@ def run_backtest(
             else:
                 forecast_returns = forecast_from_arima(arima_model, "auto_arima", forecast_periods)
         
-        last_price = train_prices.iloc[-1]  # Start forecast from end of train set
-        forecast_prices = last_price * np.exp(np.cumsum(forecast_returns))
-        actual_prices = val_prices.iloc[:forecast_periods].values  # Compare to validation set
-        all_metrics["arima"] = calculate_metrics(forecast_prices, actual_prices)
+        start_price = float(train_prices.iloc[-1])
+        forecast_prices = start_price * np.exp(np.cumsum(forecast_returns))
+        actual_prices = val_prices.iloc[:forecast_periods].values
+        val_metrics["arima"] = calculate_metrics(forecast_prices, actual_prices)
     except Exception:
         pass
     
@@ -185,39 +204,179 @@ def run_backtest(
                 # Forecast using only train data (validation data should not be used for forecasting context in evaluation)
                 forecast_returns = forecast_with_xgb(train_returns, train_exog, forecast_periods, model=xgb_model)
                 if forecast_returns is not None:
-                    last_price = train_prices.iloc[-1]  # Start forecast from end of train set
-                    forecast_prices = last_price * np.exp(np.cumsum(forecast_returns))
-                    actual_prices = val_prices.iloc[:forecast_periods].values  # Compare to validation set
+                    start_price = float(train_prices.iloc[-1])
+                    forecast_prices = start_price * np.exp(np.cumsum(forecast_returns))
+                    actual_prices = val_prices.iloc[:forecast_periods].values
                     metrics = calculate_metrics(forecast_prices, actual_prices)
                     # Only include if MAPE is reasonable (<100% to avoid extreme failures on long horizons)
                     if metrics["MAPE"] < 100:
-                        all_metrics["xgb"] = metrics
+                        val_metrics["xgb"] = metrics
         except Exception:
             pass
     
-    if not all_metrics:
-        return "random_walk", None, "unknown", {}
+    # 5. Regularized linear baselines (Ridge/Lasso/ElasticNet)
+    try:
+        ridge = train_linear_cv(train_returns, train_exog, model_kind="ridge")
+        if ridge is not None:
+            fr = forecast_with_linear(train_returns, train_exog, forecast_periods, model=ridge)
+            if fr is not None:
+                start_price = float(train_prices.iloc[-1])
+                fp = start_price * np.exp(np.cumsum(fr))
+                ap = val_prices.iloc[:forecast_periods].values
+                val_metrics["ridge"] = calculate_metrics(fp, ap)
+    except Exception:
+        pass
+
+    try:
+        lasso = train_linear_cv(train_returns, train_exog, model_kind="lasso")
+        if lasso is not None:
+            fr = forecast_with_linear(train_returns, train_exog, forecast_periods, model=lasso)
+            if fr is not None:
+                start_price = float(train_prices.iloc[-1])
+                fp = start_price * np.exp(np.cumsum(fr))
+                ap = val_prices.iloc[:forecast_periods].values
+                val_metrics["lasso"] = calculate_metrics(fp, ap)
+    except Exception:
+        pass
+
+    try:
+        enet = train_linear_cv(train_returns, train_exog, model_kind="elasticnet")
+        if enet is not None:
+            fr = forecast_with_linear(train_returns, train_exog, forecast_periods, model=enet)
+            if fr is not None:
+                start_price = float(train_prices.iloc[-1])
+                fp = start_price * np.exp(np.cumsum(fr))
+                ap = val_prices.iloc[:forecast_periods].values
+                val_metrics["elasticnet"] = calculate_metrics(fp, ap)
+    except Exception:
+        pass
     
-    # Find best model based on RMSE on validation set (correct approach for model selection)
-    # RMSE is used because it penalizes large errors more heavily, which is important for financial forecasting
-    # Models are trained on train set, evaluated on validation set, and test set remains untouched
-    best_model = min(all_metrics, key=lambda k: all_metrics[k]["RMSE"])
-    best_mape = all_metrics[best_model]["MAPE"]  # Keep MAPE for signal quality and reporting (more interpretable)
+    if not val_metrics:
+        return "random_walk", None, "unknown", {}, {}
     
-    # Determine signal quality based on MAPE (percentage-based, more interpretable)
-    if best_mape < 5:
+    # Select best model based on validation RMSE (no test leakage)
+    best_model = min(val_metrics, key=lambda k: val_metrics[k]["RMSE"])
+
+    # -----------------------
+    # Test step: refit on train+val -> score on test (final reportable metrics)
+    # -----------------------
+    combined_returns = pd.concat([train_returns, val_returns])
+    combined_prices = pd.concat([train_prices, val_prices])
+    combined_exog = None
+    if has_exog and train_exog is not None and val_exog is not None:
+        combined_exog = pd.concat([train_exog, val_exog])
+
+    # For all models, compute test metrics after refit on train+val.
+    # This is safe because we do not use test metrics for selection.
+    # Forecast start price is the last validation price (end of train+val).
+    start_price_test = float(val_prices.iloc[-1])
+    actual_prices_test = test_prices.iloc[:forecast_periods].values
+
+    # Random walk
+    try:
+        drift = float(combined_returns.mean())
+        fr = np.full(forecast_periods, drift)
+        fp = start_price_test * np.exp(np.cumsum(fr))
+        test_metrics["random_walk"] = calculate_metrics(fp, actual_prices_test)
+    except Exception:
+        pass
+
+    # AR(1)
+    try:
+        np.random.seed(42)
+        ar1_model = train_ar1(combined_returns, combined_exog)
+        if combined_exog is not None and not combined_exog.empty:
+            exog_arr = np.vstack([combined_exog.iloc[-1].values] * forecast_periods)
+        else:
+            exog_arr = None
+        fr = forecast_ar1(ar1_model, forecast_periods, exog_arr)
+        fp = start_price_test * np.exp(np.cumsum(fr))
+        m = calculate_metrics(fp, actual_prices_test)
+        if m["MAPE"] < 100:
+            test_metrics["ar1"] = m
+    except Exception:
+        pass
+
+    # ARIMA
+    try:
+        np.random.seed(42)
+        if model_type == "arima_fixed":
+            if combined_exog is not None and not combined_exog.empty:
+                arima_model = ARIMA(combined_returns, order=(1, 0, 0), exog=combined_exog).fit()
+                exog_arr = np.vstack([combined_exog.iloc[-1].values] * forecast_periods)
+                fr = arima_model.forecast(steps=forecast_periods, exog=exog_arr).values
+            else:
+                arima_model = ARIMA(combined_returns, order=(1, 0, 0)).fit()
+                fr = arima_model.forecast(steps=forecast_periods).values
+        else:
+            arima_model = auto_arima(
+                combined_returns,
+                exogenous=combined_exog if (combined_exog is not None and not combined_exog.empty) else None,
+                seasonal=False,
+                error_action="ignore",
+                suppress_warnings=True,
+                stepwise=True,
+                trace=False,
+                random_state=42,
+                n_jobs=1,
+            )
+            if combined_exog is not None and not combined_exog.empty:
+                exog_arr = np.vstack([combined_exog.iloc[-1].values] * forecast_periods)
+                fr = forecast_from_arima(arima_model, "auto_arima", forecast_periods, exog_arr)
+            else:
+                fr = forecast_from_arima(arima_model, "auto_arima", forecast_periods)
+
+        fp = start_price_test * np.exp(np.cumsum(fr))
+        test_metrics["arima"] = calculate_metrics(fp, actual_prices_test)
+    except Exception:
+        pass
+
+    # XGBoost
+    if use_ml:
+        try:
+            from .models import train_xgb_cv
+            np.random.seed(42)
+            xgb_model = train_xgb_cv(combined_returns, combined_exog)
+            if xgb_model is not None:
+                fr = forecast_with_xgb(combined_returns, combined_exog, forecast_periods, model=xgb_model)
+                if fr is not None:
+                    fp = start_price_test * np.exp(np.cumsum(fr))
+                    m = calculate_metrics(fp, actual_prices_test)
+                    if m["MAPE"] < 100:
+                        test_metrics["xgb"] = m
+        except Exception:
+            pass
+
+    # Linear models
+    for kind in ("ridge", "lasso", "elasticnet"):
+        try:
+            mdl = train_linear_cv(combined_returns, combined_exog, model_kind=kind)  # type: ignore[arg-type]
+            if mdl is None:
+                continue
+            fr = forecast_with_linear(combined_returns, combined_exog, forecast_periods, model=mdl)
+            if fr is None:
+                continue
+            fp = start_price_test * np.exp(np.cumsum(fr))
+            test_metrics[kind] = calculate_metrics(fp, actual_prices_test)
+        except Exception:
+            pass
+
+    # Final report uses test metrics of the selected model when available; otherwise fall back to validation.
+    best_test_mape = None
+    if best_model in test_metrics:
+        best_test_mape = float(test_metrics[best_model]["MAPE"])
+    else:
+        best_test_mape = float(val_metrics[best_model]["MAPE"])
+    
+    # Determine signal quality based on TEST MAPE (final)
+    if best_test_mape is not None and best_test_mape < 5:
         signal_quality = "high"
-    elif best_mape < 15:
+    elif best_test_mape is not None and best_test_mape < 15:
         signal_quality = "medium"
     else:
         signal_quality = "low"
     
-    return best_model, best_mape, signal_quality, all_metrics
-
-
-def evaluate_backtest(log_returns, exog_df, forecast_periods, model_type, prices, use_ml=True):
-    """Run the existing backtest and return (best_model_name, best_mape, signal_quality, all_metrics)."""
-    return run_backtest(log_returns, exog_df, forecast_periods, model_type, prices, use_ml=use_ml)
+    return best_model, best_test_mape, signal_quality, test_metrics, val_metrics
 
 
 def generate_forecast(
@@ -304,14 +463,15 @@ def generate_forecast(
     else:
         raise ValueError("Unsupported interval period.")
 
-    # Step 3: Run backtest to select best model (Random Walk, AR(1), ARIMA, XGBoost)
+    # Step 3: Run backtest to select best model on validation, then evaluate on test
     best_model_name = "random_walk"
     best_mape = None
     signal_quality = "unknown"
-    all_metrics = {}
+    all_metrics = {}          # test metrics (final, after refit train+val)
+    validation_metrics = {}   # selection metrics (validation)
     
     if len(prices) > forecast_steps * 3 and len(log_returns) > forecast_steps * 3 + 20:
-        best_model_name, best_mape, signal_quality, all_metrics = run_backtest(
+        best_model_name, best_mape, signal_quality, all_metrics, validation_metrics = run_backtest(
             log_returns, exog_df, forecast_steps, model_type, prices, use_ml=use_ml
         )
 
@@ -731,7 +891,8 @@ def generate_forecast(
         "sigma_fitted": sigma_fitted,
         "last_price": last_price,
         "forecast_returns": forecast_returns,
-        "all_metrics": all_metrics,  # Include all metrics for CSV export
+        "all_metrics": all_metrics,  # test metrics (final)
+        "validation_metrics": validation_metrics,  # selection metrics
     }
 
 
@@ -1154,7 +1315,7 @@ def plot_volatility_forecast(
             if freq and 'W' in freq:
                 # Weekly data: annualize with sqrt(52)
                 annualization_factor = np.sqrt(52)
-            elif freq and 'M' in freq or freq == 'MS':
+            elif freq and 'M' in freq:
                 # Monthly data: annualize with sqrt(12)
                 annualization_factor = np.sqrt(12)
             else:
@@ -1335,7 +1496,8 @@ def save_model_comparison_csv(
     all_metrics: Dict[str, Dict[str, float]],
     ticker: str,
     horizon_label: str,
-    horizon_suffix: str = ""
+    horizon_suffix: str = "",
+    dataset_label: str = "test",
 ) -> str:
     """Save model comparison metrics to CSV file.
     
@@ -1352,14 +1514,14 @@ def save_model_comparison_csv(
     
     # Create DataFrame
     rows = []
-    baseline_mape = None
+    baseline_rmse = None
     if "random_walk" in all_metrics:
-        baseline_mape = all_metrics["random_walk"]["MAPE"]
+        baseline_rmse = all_metrics["random_walk"]["RMSE"]
     
     for model_name, metrics in all_metrics.items():
         if model_name == "random_walk":
             beats_baseline = "Baseline"
-        elif baseline_mape and metrics["MAPE"] < baseline_mape:
+        elif baseline_rmse and metrics["RMSE"] < baseline_rmse:
             beats_baseline = "Yes"
         else:
             beats_baseline = "No"
@@ -1379,9 +1541,9 @@ def save_model_comparison_csv(
     os.makedirs(results_dir, exist_ok=True)
     timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     if horizon_suffix:
-        filename = f"model_comparison_{ticker}_{horizon_suffix}_{timestamp}.csv"
+        filename = f"model_comparison_{dataset_label}_{ticker}_{horizon_suffix}_{timestamp}.csv"
     else:
-        filename = f"model_comparison_{ticker}_{timestamp}.csv"
+        filename = f"model_comparison_{dataset_label}_{ticker}_{timestamp}.csv"
     filepath = os.path.join(results_dir, filename)
     df.to_csv(filepath, index=False)
     
@@ -1405,7 +1567,7 @@ def clean_old_results(ticker: str):
     patterns = [
         f"forecast_{ticker}_*.png",
         f"volatility_forecast_{ticker}_*.png",
-        f"model_comparison_{ticker}_*.csv",
+        f"model_comparison_*_{ticker}_*.csv",
         f"eda_*_{ticker}_*.png",
         f"eda_statistics_{ticker}_*.txt",
     ]

@@ -73,18 +73,10 @@ def run_single_forecast(
     except ValueError as e:
         return {"error": str(e)}
 
-    # Get current price if not provided
+    # Get current price if not provided.
+    # Avoid extra Yahoo Finance calls: use the last price from the loaded dataset.
     if current_price is None:
-        if args.use_sample_data or getattr(args, "cache_only", False):
-            current_price = float(prices.iloc[-1])
-        else:
-            try:
-                ticker_hist = yf.Ticker(ticker).history(period="1d")
-                if ticker_hist.empty:
-                    raise ValueError("empty history")
-                current_price = float(ticker_hist["Close"].iloc[-1])
-            except Exception:
-                current_price = float(prices.iloc[-1])
+        current_price = float(prices.iloc[-1])
 
     artifacts["current_price"] = current_price
     artifacts["horizon_label"] = horizon_settings['label']
@@ -101,9 +93,10 @@ def print_forecast_results(ticker: str, artifacts: Dict, horizon_settings: Dict)
     mc_p50 = artifacts.get("mc_p50")
     mc_p90 = artifacts.get("mc_p90")
     expected_return = artifacts.get("expected_return")
-    best_mape = artifacts.get("best_mape")
+    best_mape = artifacts.get("best_mape")  # test MAPE (final)
     signal_quality = artifacts.get("signal_quality")
-    all_metrics = artifacts.get("all_metrics", {})
+    all_metrics = artifacts.get("all_metrics", {})  # test metrics (final)
+    validation_metrics = artifacts.get("validation_metrics", {})  # selection metrics (validation)
     best_model = artifacts.get("best_model", "unknown")
     forecast_series = artifacts.get("forecast_series")
     current_price = artifacts.get("current_price")
@@ -121,30 +114,36 @@ def print_forecast_results(ticker: str, artifacts: Dict, horizon_settings: Dict)
     print("\n" + "-"*70)
     print(" " * 20 + "MODEL PERFORMANCE COMPARISON")
     print("-"*70)
-    if all_metrics:
-        print(f"\n{'Model':<18} {'RMSE':<12} {'MAE':<12} {'MAPE':<12} {'Status':<15}")
+    def _print_metrics_table(metrics_dict: Dict[str, Dict[str, float]], title: str, selected_model: str):
+        if not metrics_dict:
+            print(f"\n⚠ {title}: not available (insufficient data)")
+            return
+        print(f"\n{title}")
+        print(f"{'Model':<18} {'RMSE':<12} {'MAE':<12} {'MAPE':<12} {'Status':<22}")
         print("-" * 70)
-        baseline_mape = all_metrics.get("random_walk", {}).get("MAPE")
-        
-        for model_name in ["random_walk", "ar1", "arima", "xgb"]:
-            if model_name in all_metrics:
-                metrics = all_metrics[model_name]
-                if model_name == best_model:
-                    status = "✓ BEST MODEL"
-                elif model_name == "random_walk":
-                    status = "Baseline"
-                elif baseline_mape and metrics["MAPE"] < baseline_mape:
-                    improvement = ((baseline_mape - metrics["MAPE"]) / baseline_mape) * 100
-                    status = f"✓ Beats baseline ({improvement:.1f}% better)"
-                else:
-                    status = "✗ Below baseline"
-                
-                model_display = model_name.upper() if model_name != "random_walk" else "Random Walk"
-                print(f"{model_display:<18} {metrics['RMSE']:<12.4f} {metrics['MAE']:<12.4f} {metrics['MAPE']:<12.2f}% {status:<15}")
-        
+        baseline_rmse = metrics_dict.get("random_walk", {}).get("RMSE")
+        order = ["random_walk", "ridge", "lasso", "elasticnet", "ar1", "arima", "xgb"]
+        for model_name in order:
+            if model_name not in metrics_dict:
+                continue
+            metrics = metrics_dict[model_name]
+            if model_name == selected_model:
+                status = "✓ SELECTED (val best)"
+            elif model_name == "random_walk":
+                status = "Baseline"
+            elif baseline_rmse and metrics["RMSE"] < baseline_rmse:
+                improvement = ((baseline_rmse - metrics["RMSE"]) / baseline_rmse) * 100
+                status = f"✓ Beats baseline ({improvement:.1f}% rmse)"
+            else:
+                status = "✗ Below baseline"
+            model_display = model_name.upper() if model_name != "random_walk" else "Random Walk"
+            print(
+                f"{model_display:<18} {metrics['RMSE']:<12.4f} {metrics['MAE']:<12.4f} {metrics['MAPE']:<12.2f}% {status:<22}"
+            )
         print("-" * 70)
-    else:
-        print("\n⚠ Model comparison not available (insufficient data)")
+
+    _print_metrics_table(validation_metrics, "Validation (used for selection)", best_model)
+    _print_metrics_table(all_metrics, "Test (final; refit on train+val)", best_model)
     
     # Forecast Summary
     print("\n" + "-"*70)
@@ -370,21 +369,18 @@ def main():
         print(f"\nAsset: {ticker}")
         print(f"Running forecasts for: {', '.join([h[2] for h in all_horizon_configs])}\n")
         
-        # Get current price once (will be used for all horizons)
+        # Get current price once (will be used for all horizons).
+        # Avoid extra Yahoo Finance calls: use the last price from the loaded dataset.
         try:
-            if args.use_sample_data or args.cache_only:
-                # Get price from first data load
-                test_hs = compute_horizon_settings(10.0, "day")
-                test_data = load_series_for_horizon(ticker, test_hs, 
-                                                   extra_history_period=args.extra_history, 
-                                                   use_sample_data=args.use_sample_data,
-                                                   cache_only=args.cache_only)
-                current_price = float(test_data.get("prices").iloc[-1])
-            else:
-                ticker_hist = yf.Ticker(ticker).history(period="1d")
-                if ticker_hist.empty:
-                    raise ValueError("empty history")
-                current_price = float(ticker_hist["Close"].iloc[-1])
+            test_hs = compute_horizon_settings(10.0, "day")
+            test_data = load_series_for_horizon(
+                ticker,
+                test_hs,
+                extra_history_period=args.extra_history,
+                use_sample_data=args.use_sample_data,
+                cache_only=args.cache_only,
+            )
+            current_price = float(test_data.get("prices").iloc[-1])
         except Exception:
             # Fallback: will be set in first forecast
             current_price = None
@@ -446,10 +442,19 @@ def main():
                         if vol_path:
                             all_saved_paths.append(vol_path)
                     
-                    # Save CSV
-                    all_metrics = artifacts.get("all_metrics", {})
-                    if all_metrics:
-                        csv_path = save_model_comparison_csv(all_metrics, ticker, horizon_label, horizon_suffix=horizon_safe)
+                    # Save CSVs (validation + test)
+                    test_metrics = artifacts.get("all_metrics", {})
+                    val_metrics = artifacts.get("validation_metrics", {})
+                    if val_metrics:
+                        csv_path = save_model_comparison_csv(
+                            val_metrics, ticker, horizon_label, horizon_suffix=horizon_safe, dataset_label="validation"
+                        )
+                        if csv_path:
+                            all_saved_paths.append(csv_path)
+                    if test_metrics:
+                        csv_path = save_model_comparison_csv(
+                            test_metrics, ticker, horizon_label, horizon_suffix=horizon_safe, dataset_label="test"
+                        )
                         if csv_path:
                             all_saved_paths.append(csv_path)
                 
@@ -550,18 +555,9 @@ def main():
     forecast_series = artifacts.get("forecast_series")
     last_price = artifacts.get("last_price", prices.iloc[-1])
 
-    # Current price - use the last price from the data that was actually used
-    # If using sample data, don't fetch real price from yfinance (would cause mismatch)
-    if args.use_sample_data or args.cache_only:
-        current_price = float(prices.iloc[-1])
-    else:
-        try:
-            ticker_hist = yf.Ticker(ticker).history(period="1d")
-            if ticker_hist.empty:
-                raise ValueError("empty history")
-            current_price = float(ticker_hist["Close"].iloc[-1])
-        except Exception:
-            current_price = float(prices.iloc[-1])
+    # Current price - use the last price from the data that was actually used.
+    # Avoid extra Yahoo Finance calls.
+    current_price = float(prices.iloc[-1])
 
     print("\n" + "="*70)
     print(" " * 15 + "FORECASTING RESULTS SUMMARY")
@@ -577,58 +573,51 @@ def main():
     print("\n" + "-"*70)
     print(" " * 20 + "MODEL PERFORMANCE COMPARISON")
     print("-"*70)
-    if all_metrics:
-        print(f"\n{'Model':<18} {'RMSE':<12} {'MAE':<12} {'MAPE':<12} {'Status':<15}")
+    validation_metrics = artifacts.get("validation_metrics", {})
+
+    def _print_metrics_table(metrics_dict: Dict[str, Dict[str, float]], title: str, selected_model: str):
+        if not metrics_dict:
+            print(f"\n⚠ {title}: not available (insufficient data)")
+            return
+        print(f"\n{title}")
+        print(f"{'Model':<18} {'RMSE':<12} {'MAE':<12} {'MAPE':<12} {'Status':<22}")
         print("-" * 70)
-        baseline_mape = all_metrics.get("random_walk", {}).get("MAPE")
-        baseline_rmse = all_metrics.get("random_walk", {}).get("RMSE")
-        
-        for model_name in ["random_walk", "ar1", "arima", "xgb"]:
-            if model_name in all_metrics:
-                metrics = all_metrics[model_name]
-                if model_name == best_model:
-                    status = "✓ BEST MODEL"
-                elif model_name == "random_walk":
-                    status = "Baseline"
-                elif baseline_mape and metrics["MAPE"] < baseline_mape:
-                    improvement = ((baseline_mape - metrics["MAPE"]) / baseline_mape) * 100
-                    status = f"✓ Beats baseline ({improvement:.1f}% better)"
-                else:
-                    status = "✗ Below baseline"
-                
-                model_display = model_name.upper() if model_name != "random_walk" else "Random Walk"
-                print(f"{model_display:<18} {metrics['RMSE']:<12.4f} {metrics['MAE']:<12.4f} {metrics['MAPE']:<12.2f}% {status:<15}")
-        
-        print("-" * 70)
-        
-        # Key Findings
-        print("\n📊 KEY FINDINGS:")
-        if baseline_mape:
-            ml_models = [m for m in all_metrics.keys() if m in ["ar1", "arima", "xgb"]]
-            ml_beats_baseline = any(all_metrics[m]["MAPE"] < baseline_mape for m in ml_models if m in all_metrics)
-            if ml_beats_baseline:
-                best_ml = min([m for m in ml_models if m in all_metrics], 
-                             key=lambda m: all_metrics[m]["MAPE"])
-                improvement = ((baseline_mape - all_metrics[best_ml]["MAPE"]) / baseline_mape) * 100
-                print(f"  ✓ Machine learning models outperform the baseline")
-                print(f"  ✓ Best ML model ({best_ml.upper()}) improves MAPE by {improvement:.1f}%")
+        baseline_rmse = metrics_dict.get("random_walk", {}).get("RMSE")
+        order = ["random_walk", "ridge", "lasso", "elasticnet", "ar1", "arima", "xgb"]
+        for model_name in order:
+            if model_name not in metrics_dict:
+                continue
+            m = metrics_dict[model_name]
+            if model_name == selected_model:
+                status = "✓ SELECTED (val best)"
+            elif model_name == "random_walk":
+                status = "Baseline"
+            elif baseline_rmse and m["RMSE"] < baseline_rmse:
+                improvement = ((baseline_rmse - m["RMSE"]) / baseline_rmse) * 100
+                status = f"✓ Beats baseline ({improvement:.1f}% rmse)"
             else:
-                print(f"  ✗ Machine learning models did not beat the random walk baseline")
-                print(f"  → This is a valid finding: baseline models are often strong for financial time series")
-                print(f"  → The efficient market hypothesis suggests prices follow a random walk")
-        
-        if best_model == "random_walk":
-            print(f"  → Random Walk with Drift is the best performing model")
-            print(f"  → Simple mean return forecast outperforms complex models")
-        elif best_model in ["ar1", "arima"]:
-            print(f"  → Statistical time-series model ({best_model.upper()}) performs best")
-            print(f"  → Autocorrelation in returns provides predictive signal")
-        elif best_model == "xgb":
-            print(f"  → Machine learning model (XGBoost) performs best")
-            print(f"  → Non-linear patterns in lagged returns and features are predictive")
+                status = "✗ Below baseline"
+            disp = model_name.upper() if model_name != "random_walk" else "Random Walk"
+            print(f"{disp:<18} {m['RMSE']:<12.4f} {m['MAE']:<12.4f} {m['MAPE']:<12.2f}% {status:<22}")
+        print("-" * 70)
+
+    _print_metrics_table(validation_metrics, "Validation (used for selection)", best_model)
+    _print_metrics_table(all_metrics, "Test (final; refit on train+val)", best_model)
+
+    # Key Findings (brief, based on test metrics)
+    if all_metrics:
+        print("\n📊 KEY FINDINGS (TEST):")
+        baseline_rmse = all_metrics.get("random_walk", {}).get("RMSE")
+        if baseline_rmse is not None:
+            beats = [m for m in all_metrics.keys() if m != "random_walk" and all_metrics[m]["RMSE"] < baseline_rmse]
+            if beats:
+                best_test = min(all_metrics, key=lambda k: all_metrics[k]["RMSE"])
+                print(f"  ✓ Some models beat the baseline RMSE on test (best: {best_test.upper()})")
+            else:
+                print("  ✗ No model beats the random walk baseline on test RMSE (common in finance).")
+        print(f"  → Selected model (chosen on validation): {best_model.upper().replace('_', ' ')}")
     else:
-        print("\n⚠ Model comparison not available (insufficient data for train/val/test split)")
-        print("  → Need at least 3x forecast horizon + 20 periods for proper evaluation")
+        print("\n⚠ Test metrics not available (insufficient data for train/val/test split).")
     
     # Forecast Summary Section
     print("\n" + "-"*70)
@@ -739,12 +728,19 @@ def main():
             saved_paths.append(vol_path)
             print(f"Volatility forecast plot saved to: {vol_path}")
     
-    # 3. Model comparison CSV
-    if all_metrics:
-        csv_path = save_model_comparison_csv(all_metrics, ticker, horizon_settings['label'])
+    # 3. Model comparison CSVs (validation + test)
+    test_metrics = artifacts.get("all_metrics", {})
+    val_metrics = artifacts.get("validation_metrics", {})
+    if val_metrics:
+        csv_path = save_model_comparison_csv(val_metrics, ticker, horizon_settings["label"], dataset_label="validation")
         if csv_path:
             saved_paths.append(csv_path)
-            print(f"Model comparison CSV saved to: {csv_path}")
+            print(f"Model comparison (validation) CSV saved to: {csv_path}")
+    if test_metrics:
+        csv_path = save_model_comparison_csv(test_metrics, ticker, horizon_settings["label"], dataset_label="test")
+        if csv_path:
+            saved_paths.append(csv_path)
+            print(f"Model comparison (test) CSV saved to: {csv_path}")
     
     if saved_paths:
         print(f"\nAll outputs saved to results/ directory ({len(saved_paths)} files)")

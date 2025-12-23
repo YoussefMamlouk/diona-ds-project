@@ -12,7 +12,8 @@ This project implements and compares multiple forecasting models to predict fina
 1. **Random Walk with Drift** (baseline) - Simple mean return model
 2. **AR(1)** - Autoregressive model of order 1
 3. **ARIMA** - Auto-selected ARIMA model (or fixed AR(1) for daily horizons)
-4. **XGBoost Regressor** - Machine learning model with lag features and exogenous variables
+4. **Ridge / Lasso / ElasticNet** - Regularized linear baselines with lag + exogenous features
+5. **XGBoost Regressor** - Machine learning model with lag features and exogenous variables
 
 ### Volatility Prediction
 - **GARCH(1,1)** - Generalized Autoregressive Conditional Heteroskedasticity model for volatility forecasting
@@ -20,8 +21,8 @@ This project implements and compares multiple forecasting models to predict fina
 ## Evaluation Methodology
 
 - **Time-series aware train/validation/test split** - Ensures no data leakage
-- **Model selection** - Based on validation set performance
-- **Final evaluation** - Only on test set
+- **Model selection** - Choose the best model on the **validation set** using **RMSE**
+- **Final evaluation** - Refit the selected model on **train + validation**, then evaluate once on the **test set**
 - **Metrics**: RMSE, MAE, MAPE
 - **Baseline comparison** - Explicit comparison against random walk baseline
 
