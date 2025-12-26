@@ -1,8 +1,7 @@
 import os
-import re
 import sys
 import warnings
-from typing import Tuple, Dict
+from typing import Dict
 
 # Set environment variables for reproducibility BEFORE importing numerical libraries
 os.environ['PYTHONHASHSEED'] = '0'  # For hash-based operations
@@ -20,7 +19,14 @@ import pathlib
 # Use package-relative imports. Run the project with `python main.py`.
 # Relative imports are the recommended, idiomatic approach for packages.
 from src.data_loader import compute_horizon_settings, load_series_for_horizon
-from src.evaluation import generate_forecast, plot_forecast, plot_volatility_forecast, save_model_comparison_csv, clean_old_results
+from src.evaluation import (
+    generate_forecast,
+    plot_forecast,
+    plot_volatility_forecast,
+    plot_volatility_backtest,
+    save_model_comparison_csv,
+    clean_old_results,
+)
 from src.eda import generate_eda_report
 
 warnings.filterwarnings("ignore")
@@ -84,6 +90,8 @@ def run_single_forecast(
     artifacts["horizon_unit"] = horizon_unit
     
     return artifacts
+
+
 
 
 def print_forecast_results(ticker: str, artifacts: Dict, horizon_settings: Dict):
@@ -188,38 +196,6 @@ def print_forecast_results(ticker: str, artifacts: Dict, horizon_settings: Dict)
         print(f"{'Signal Quality:':<25} {signal_quality.upper()}")
 
 
-def prompt_horizon() -> Tuple[float, str]:
-    """Parse horizon like '6 days', '3 months', '1 year' and return (value, normalized_unit)."""
-    unit_map = {
-        "d": "day",
-        "day": "day",
-        "days": "day",
-        "w": "week",
-        "week": "week",
-        "weeks": "week",
-        "m": "month",
-        "mo": "month",
-        "month": "month",
-        "months": "month",
-        "y": "year",
-        "yr": "year",
-        "year": "year",
-        "years": "year",
-    }
-    pattern = re.compile(r"^\s*([0-9]*\.?[0-9]+)\s*([a-zA-Z]+)\s*$")
-    while True:
-        raw = input(" Enter your investment horizon (e.g., '6 days', '3 months', '1 year'): ").lower()
-        match = pattern.match(raw)
-        if not match:
-            print(" Invalid format. Please type a number followed by a unit (days/weeks/months/years).")
-            continue
-        value = float(match.group(1))
-        unit = unit_map.get(match.group(2))
-        if unit is None:
-            print(" Unsupported unit. Please use days, weeks, months, or years.")
-            continue
-        return value, unit
-
 def main():
     # Make results reproducible by default
     np.random.seed(42)
@@ -240,8 +216,7 @@ def main():
     parser.add_argument("--extra-history", dest="extra_history", help="Override download period (e.g. '2y') to fetch extra history", default=None)
     parser.add_argument("--save", dest="save_plot", help="Save generated plot to results/", action="store_true")
     parser.add_argument("--use-sample-data", dest="use_sample_data", help="Use a deterministic synthetic sample dataset (offline mode)", action="store_true")
-    parser.add_argument("--demo", dest="demo", help="Run a deterministic demo (non-interactive). Defaults to 10 days, but can be overridden with --horizon", action="store_true")
-    parser.add_argument("--horizon", dest="horizon", help="Provide horizon (e.g. '10 days', '3 months', '1 year') to run non-interactively. Works with --demo to override default 10 days", default=None)
+    parser.add_argument("--demo", dest="demo", help="Run a deterministic demo (non-interactive) on standard horizons", action="store_true")
     parser.add_argument("--all-horizons", dest="all_horizons", help="Run forecasts for all horizon types (10 days, 1 month, 3 months, 6 months, 1 year) in a single run", action="store_true")
     parser.add_argument("--n-scenarios", dest="n_scenarios", help="Number of Monte Carlo scenarios (default 500)", type=int, default=500)
     parser.add_argument("--no-ml", dest="no_ml", help="Disable ML models (XGBoost) and run only statistical models", action="store_true")
@@ -261,72 +236,26 @@ def main():
         if not args.eda_period:
             args.eda_period = "5y"
 
-    print("\n=============================================\n")
-    print("Stock Forecasting & Risk Analysis Tool\n")
-    print("=============================================\n")
-    if auto_full_run:
-        print("Running default full pipeline (EDA + all-horizons forecasts).")
-        print("Reproducibility mode: using cached Yahoo Finance CSV only (no downloads).\n")
-    else:
-        print("This tool will help you analyze the stock of your choice.")
-        print("Please provide the following information to proceed:\n")
+    standard_horizons = [
+        (10.0, "day", "10 days"),
+        (1.0, "month", "1 month"),
+        (3.0, "month", "3 months"),
+        (6.0, "month", "6 months"),
+        (1.0, "year", "1 year"),
+    ]
+    horizon_labels = ", ".join([h[2] for h in standard_horizons])
 
     # Decide whether this run includes forecasting (vs EDA-only).
-    wants_forecasts = auto_full_run or args.all_horizons or (args.horizon is not None) or (not args.run_eda)
+    wants_forecasts = auto_full_run or args.all_horizons or (not args.run_eda)
+    if wants_forecasts:
+        args.all_horizons = True
+        if auto_full_run:
+            print("Running default full pipeline (EDA + all-horizons forecasts).")
+            print("Reproducibility mode: using cached Yahoo Finance CSV only (no downloads).")
+        print(f"Forecast horizons: {horizon_labels}\n")
 
-    # Always use hardcoded TSLA ticker for reproducibility
-    if args.demo:
-        # Demo mode: allow horizon override
-        if args.horizon:
-            # Parse horizon if provided with demo
-            try:
-                raw = args.horizon
-                pattern = re.compile(r"^\s*([0-9]*\.?[0-9]+)\s*([a-zA-Z]+)\s*$")
-                m = pattern.match(raw)
-                if not m:
-                    raise ValueError("Invalid horizon format")
-                hv = float(m.group(1))
-                unit = m.group(2).lower()
-                unit_map = {"d":"day","day":"day","days":"day","w":"week","week":"week","weeks":"week","m":"month","mo":"month","month":"month","months":"month","y":"year","yr":"year","year":"year","years":"year"}
-                if unit not in unit_map:
-                    raise ValueError("Unsupported unit")
-                horizon_value, horizon_unit = hv, unit_map[unit]
-                print(f"Running deterministic demo: {ticker} for {horizon_value} {horizon_unit}(s) (seeded)")
-            except Exception:
-                print("Invalid --horizon format. Using default 10 days.")
-                horizon_value, horizon_unit = 10.0, "day"
-                print(f"Running deterministic demo: {ticker} for 10 days (seeded)")
-        else:
-            # Default demo: 10 days
-            horizon_value, horizon_unit = 10.0, "day"
-            print(f"Running deterministic demo: {ticker} for 10 days (seeded)")
-        # ensure demo saves the plot for inspection
-        args.save_plot = True
-    else:
-        if wants_forecasts:
-            if args.horizon:
-                # parse horizon argument like '10 days'
-                try:
-                    raw = args.horizon
-                    pattern = re.compile(r"^\s*([0-9]*\.?[0-9]+)\s*([a-zA-Z]+)\s*$")
-                    m = pattern.match(raw)
-                    if not m:
-                        raise ValueError("Invalid horizon format")
-                    hv = float(m.group(1))
-                    unit = m.group(2).lower()
-                    # map units similar to prompt_horizon
-                    unit_map = {"d":"day","day":"day","days":"day","w":"week","week":"week","weeks":"week","m":"month","mo":"month","month":"month","months":"month","y":"year","yr":"year","year":"year","years":"year"}
-                    if unit not in unit_map:
-                        raise ValueError("Unsupported unit")
-                    horizon_value, horizon_unit = hv, unit_map[unit]
-                except Exception:
-                    print("Invalid --horizon format. Using default 10 days.")
-                    horizon_value, horizon_unit = 10.0, "day"
-            else:
-                horizon_value, horizon_unit = prompt_horizon()
-        else:
-            # EDA-only mode: use default horizon
-            horizon_value, horizon_unit = 10.0, "day"
+    # Default horizon placeholder (unused when running standard horizons)
+    horizon_value, horizon_unit = 10.0, "day"
 
     # If we're saving outputs, clean once up-front (avoid deleting EDA outputs later)
     if args.save_plot and (args.run_eda or args.all_horizons):
@@ -354,14 +283,8 @@ def main():
         if args.save_plot and (not args.run_eda):
             clean_old_results(ticker)
         
-        # Define standard horizons to test
-        all_horizon_configs = [
-            (10.0, "day", "10 days"),
-            (1.0, "month", "1 month"),
-            (3.0, "month", "3 months"),
-            (6.0, "month", "6 months"),
-            (1.0, "year", "1 year"),
-        ]
+        # Standard horizons to test
+        all_horizon_configs = standard_horizons
         
         print("\n" + "="*70)
         print(" " * 15 + "RUNNING FORECASTS FOR ALL HORIZONS")
@@ -441,6 +364,17 @@ def main():
                         )
                         if vol_path:
                             all_saved_paths.append(vol_path)
+
+                    vol_backtest = artifacts.get("vol_backtest", {})
+                    if isinstance(vol_backtest, dict) and vol_backtest:
+                        bt_path = plot_volatility_backtest(
+                            ticker,
+                            vol_backtest,
+                            save=True,
+                            horizon_suffix=horizon_safe,
+                        )
+                        if bt_path:
+                            all_saved_paths.append(bt_path)
                     
                     # Save CSVs (validation + test)
                     test_metrics = artifacts.get("all_metrics", {})
@@ -506,6 +440,38 @@ def main():
             print(f"{horizon:<15} {model_str:<15} {mape_str:<10} {return_str:<18} {risk_level:<12}")
         
         print("-" * 70)
+
+        print("\n" + "-"*70)
+        print(" " * 15 + "VOLATILITY BACKTEST SUMMARY")
+        print("-"*70)
+        print(f"{'Horizon':<15} {'Model':<12} {'RMSE':<12} {'MAE':<12} {'QLIKE':<12} {'Window':<10} {'Points':<10}")
+        print("-" * 70)
+        for result in all_results:
+            horizon = result["horizon"]
+            artifacts = result["artifacts"]
+            vol_backtest = artifacts.get("vol_backtest", {})
+            metrics = vol_backtest.get("metrics", {}) if isinstance(vol_backtest, dict) else {}
+            window = vol_backtest.get("rolling_window") if isinstance(vol_backtest, dict) else None
+            n_obs = vol_backtest.get("points") if isinstance(vol_backtest, dict) else None
+            window_str = str(int(window)) if window else "N/A"
+            n_obs_str = str(int(n_obs)) if n_obs else "N/A"
+
+            def _row(label: str, m: Dict[str, float], horizon_label: str):
+                rmse = m.get("RMSE")
+                mae = m.get("MAE")
+                qlike = m.get("QLIKE")
+                rmse_str = f"{rmse:.4f}%" if rmse is not None else "N/A"
+                mae_str = f"{mae:.4f}%" if mae is not None else "N/A"
+                qlike_str = f"{qlike:.4f}" if qlike is not None else "N/A"
+                print(f"{horizon_label:<15} {label:<12} {rmse_str:<12} {mae_str:<12} {qlike_str:<12} {window_str:<10} {n_obs_str:<10}")
+
+            garch_m = metrics.get("garch", {})
+            if garch_m:
+                _row("GARCH", garch_m, horizon)
+            ewma_m = metrics.get("baseline_ewma", {})
+            if ewma_m:
+                _row("BASELINE", ewma_m, "")
+        print("-" * 70)
         
         if all_saved_paths:
             print(f"\n✓ All outputs saved ({len(all_saved_paths)} files)")
@@ -518,7 +484,7 @@ def main():
     horizon_settings = compute_horizon_settings(horizon_value, horizon_unit)
     # Notify user when horizon is long and forecasts will be less precise
     if horizon_settings.get("invested_days", 0) > 252:
-        print("\nNote: You selected a long investment horizon — forecasts become less precise for longer horizons. Expect wider confidence bands.\n")
+        print("\nNote: Longer investment horizons reduce precision — expect wider confidence bands.\n")
     data = load_series_for_horizon(
         ticker,
         horizon_settings,
@@ -672,6 +638,25 @@ def main():
         print(f"{'Volatility Level:':<35} {vol_level}")
         print(f"\n  Note: Volatility forecast based on GARCH(1,1) model")
         print(f"        Higher volatility indicates greater price uncertainty")
+        vol_backtest = artifacts.get("vol_backtest", {})
+        if isinstance(vol_backtest, dict) and vol_backtest:
+            metrics = vol_backtest.get("metrics", {})
+            def _print_vol_line(label: str, m: Dict[str, float]):
+                rmse = m.get("RMSE")
+                mae = m.get("MAE")
+                qlike = m.get("QLIKE")
+                if rmse is None and mae is None and qlike is None:
+                    return
+                rmse_str = f"{rmse:.4f}%" if rmse is not None else "N/A"
+                mae_str = f"{mae:.4f}%" if mae is not None else "N/A"
+                qlike_str = f"{qlike:.4f}" if qlike is not None else "N/A"
+                print(f"\n{label:<35} RMSE {rmse_str}, MAE {mae_str}, QLIKE {qlike_str}")
+            garch_m = metrics.get("garch", {})
+            if garch_m:
+                _print_vol_line("Vol Backtest (GARCH):", garch_m)
+            ewma_m = metrics.get("baseline_ewma", {})
+            if ewma_m:
+                _print_vol_line("Vol Backtest (Baseline):", ewma_m)
     
     # Model Quality Section
     print("\n" + "-"*70)
@@ -727,6 +712,13 @@ def main():
         if vol_path:
             saved_paths.append(vol_path)
             print(f"Volatility forecast plot saved to: {vol_path}")
+
+    vol_backtest = artifacts.get("vol_backtest", {})
+    if args.save_plot and isinstance(vol_backtest, dict) and vol_backtest:
+        bt_path = plot_volatility_backtest(ticker, vol_backtest, save=True, horizon_suffix=horizon_label_safe)
+        if bt_path:
+            saved_paths.append(bt_path)
+            print(f"Volatility backtest plot saved to: {bt_path}")
     
     # 3. Model comparison CSVs (validation + test)
     test_metrics = artifacts.get("all_metrics", {})
@@ -748,4 +740,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
