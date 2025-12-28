@@ -1,76 +1,73 @@
 Project Proposal
 ================
 
-Title: Machine Learning Model Comparison for Financial Asset Return and Volatility Forecasting
+Title: Return and Volatility Forecasting Across Investment Horizons
 
 Objective
 ---------
-This project implements and compares multiple forecasting models to predict financial asset returns and volatility over different investment horizons. The primary research question is:
+This project implements a reproducible forecasting pipeline to compare statistical and machine-learning models for asset returns, and a dedicated volatility model for risk estimation. The primary research question is:
 
-**Which model best predicts asset returns and volatility over different investment horizons: statistical time-series models or machine learning models?**
+**Which modeling family best forecasts returns and volatility across short and long investment horizons?**
 
-The project explicitly evaluates whether machine learning models (XGBoost) outperform traditional statistical models (AR(1), ARIMA) and a simple baseline (Random Walk with Drift) for financial time series forecasting.
+The code evaluates whether ML (XGBoost) provides measurable gains over statistical baselines, while treating volatility as a separate, more predictable target.
 
 Data
 ----
-Primary price data is sourced from Yahoo Finance (via `yfinance` library). For robustness and offline use, the codebase includes a deterministic `--use-sample-data` mode that produces synthetic but reproducible data. Exogenous features include volume, momentum indicators, and rolling historical volatility.
+Primary price data is sourced from Yahoo Finance (via `yfinance`). For offline and deterministic runs, the codebase supports `--use-sample-data`. Exogenous features include volume, momentum indicators, and rolling historical volatility.
 
 Methods
 -------
 **Preprocessing:**
-- Resample to requested horizon (daily/weekly/monthly)
+- Resample prices to the target horizon (daily/weekly/monthly)
 - Compute log-returns and align exogenous variables
-- Add rolling 21-day historical volatility feature
+- Add a rolling 21-day historical volatility feature
 
 **Return Prediction Models:**
-1. **Random Walk with Drift** (baseline) - Simple mean return model
-2. **AR(1)** - Autoregressive model of order 1 with optional exogenous variables
-3. **ARIMA** - Auto-selected ARIMA model (or fixed AR(1) for daily horizons)
-4. **XGBoost Regressor** - Machine learning model with lag features and exogenous variables
+1. **Random Walk with Drift** (baseline)
+2. **AR(1)** with optional exogenous variables
+3. **ARIMA** (fixed AR(1) for daily horizons; auto-selected otherwise)
+4. **XGBoost Regressor** with lag and exogenous features
+5. **Linear baselines** (Ridge/Lasso/ElasticNet)
 
 **Volatility Prediction:**
-- **GARCH(1,1)** - Generalized Autoregressive Conditional Heteroskedasticity model for forward-looking volatility forecasts
+- **GJR-GARCH(1,1)** with Student-t innovations on daily returns
+- Forecasts are generated on daily data and aggregated to each horizon
 
 **Evaluation Methodology:**
-- Time-series aware train/validation/test split (ensures no data leakage)
-- Model selection based on validation set performance
-- Final evaluation only on test set
-- Metrics: RMSE, MAE, MAPE
-- Explicit comparison against random walk baseline
-- If ML models do not beat baseline, this is documented as a valid finding
+- Time-series train/validation/test split (no leakage)
+- Model selection on validation; final metrics on test
+- Return metrics: RMSE, MAE, MAPE
+- Volatility backtest: rolling refit with forward realized variance target
+- Volatility metrics: RMSE, MAE (annualized), and QLIKE
+- Baseline for volatility: EWMA variance (lambda = 0.94)
 
 **Monte Carlo Simulation:**
-- Combines return forecasts with GARCH-implied volatility shocks
-- Generates probabilistic price paths and confidence intervals
+- Combines return forecasts with GARCH-driven volatility shocks
+- Produces probabilistic price paths and confidence intervals
+
+Horizon Design
+--------------
+The tool reports results on a fixed grid of horizons for comparability:
+10 days, 1 month, 3 months, 6 months, 1 year.
 
 Deliverables
 ------------
-- Working repository with `python main.py` as the entry point and `--use-sample-data` for offline use
-- Reproducible environment files (`requirements.txt`, `environment.yml`) with all dependencies
-- Random seeds set everywhere (NumPy, sklearn, XGBoost) for deterministic behavior
-- Model comparison outputs:
-  - Model comparison CSV with RMSE, MAE, MAPE for all models
-  - Price forecast plots with confidence intervals
-  - Volatility forecast plots (historical vs GARCH)
-  - Monte Carlo price path visualizations
-- Unit tests for core functionality
-- Technical report describing methodology, results, and limitations
-- Presentation video demonstrating the code running
-
-Key Findings
------------
-The project explicitly compares all models against the random walk baseline. The evaluation framework ensures:
-- No data leakage through proper time-series splitting
-- Fair comparison across all models
-- Clear documentation of whether ML models outperform statistical models
-- Recognition that baseline models are often strong for financial time series (efficient market hypothesis)
+- Reproducible pipeline via `python main.py`
+- Offline mode with `--use-sample-data`
+- Environment files (`requirements.txt`, `environment.yml`)
+- Model comparison CSVs (validation and test)
+- Price forecast plots with confidence bands
+- Volatility forecast plots (historical vs GARCH)
+- Volatility backtest plots (realized vs forecast vs baseline)
+- EDA report and plots
+- Technical report summarizing methodology, results, and limitations
 
 Expected Results
 ----------------
-Given the efficient market hypothesis and the difficulty of forecasting financial time series, it is expected that:
-- The random walk baseline may be competitive or even superior for some horizons
-- AR(1) and ARIMA may show slight improvements for short horizons
-- XGBoost may capture non-linear patterns but may overfit on limited financial data
-- Results will vary by asset and horizon, demonstrating the importance of model comparison
+Given the efficient market hypothesis:
+- Simple baselines may remain competitive for returns
+- ML gains may be limited to specific horizons or features
+- Volatility should be more predictable than returns
+- A properly specified GARCH model should add value over a naive EWMA baseline, especially at medium and longer horizons
 
-This project provides a rigorous framework to evaluate these hypotheses and document findings transparently.
+This project focuses on transparent, reproducible comparisons rather than optimizing for a single headline metric.
