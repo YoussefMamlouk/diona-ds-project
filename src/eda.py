@@ -673,7 +673,7 @@ def print_insights(ticker: str, data: pd.DataFrame, prices: pd.Series, returns: 
     
     # Price insights
     price_change = ((prices.iloc[-1] / prices.iloc[0]) - 1) * 100
-    print(f"\n📈 PRICE TRENDS:")
+    print(f"\n PRICE TRENDS:")
     print(f"  • Total return over 5 years: {price_change:+.2f}%")
     print(f"  • Current price: ${prices.iloc[-1]:.2f}")
     print(f"  • Price range: ${prices.min():.2f} - ${prices.max():.2f}")
@@ -683,7 +683,7 @@ def print_insights(ticker: str, data: pd.DataFrame, prices: pd.Series, returns: 
     annual_vol = returns.std() * np.sqrt(252) * 100
     sharpe_ratio = annual_return / annual_vol if annual_vol > 0 else 0
     
-    print(f"\n📊 RETURNS CHARACTERISTICS:")
+    print(f"\n RETURNS CHARACTERISTICS:")
     print(f"  • Annualized return: {annual_return:+.2f}%")
     print(f"  • Annualized volatility: {annual_vol:.2f}%")
     print(f"  • Sharpe ratio (approx): {sharpe_ratio:.2f}")
@@ -694,7 +694,7 @@ def print_insights(ticker: str, data: pd.DataFrame, prices: pd.Series, returns: 
     vol_clean = vol_21d.dropna()
     if len(vol_clean) > 0:
         vol_trend = "increasing" if vol_clean.iloc[-30:].mean() > vol_clean.iloc[:30].mean() else "decreasing"
-        print(f"\n📉 VOLATILITY PATTERNS:")
+        print(f"\n VOLATILITY PATTERNS:")
         print(f"  • Average volatility: {vol_clean.mean():.2f}%")
         print(f"  • Volatility range: {vol_clean.min():.2f}% - {vol_clean.max():.2f}%")
         print(f"  • Recent trend: {vol_trend}")
@@ -710,13 +710,13 @@ def print_insights(ticker: str, data: pd.DataFrame, prices: pd.Series, returns: 
     recent_volume = volume.iloc[-30:].mean() / 1e6
     volume_trend = "increasing" if recent_volume > avg_volume else "decreasing"
     
-    print(f"\n📦 VOLUME ANALYSIS:")
+    print(f"\n VOLUME ANALYSIS:")
     print(f"  • Average daily volume: {avg_volume:.1f}M shares")
     print(f"  • Recent average (30d): {recent_volume:.1f}M shares")
     print(f"  • Volume trend: {volume_trend}")
     
     # Risk assessment
-    print(f"\n⚠️  RISK ASSESSMENT:")
+    print(f"\n  RISK ASSESSMENT:")
     if annual_vol > 40:
         risk_level = "VERY HIGH"
     elif annual_vol > 30:
