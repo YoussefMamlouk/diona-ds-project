@@ -23,7 +23,6 @@ from src.evaluation import (
     generate_forecast,
     plot_forecast,
     plot_volatility_forecast,
-    plot_volatility_backtest,
     save_model_comparison_csv,
     clean_old_results,
 )
@@ -236,6 +235,7 @@ def main():
         if not args.eda_period:
             args.eda_period = "5y"
 
+
     standard_horizons = [
         (10.0, "day", "10 days"),
         (1.0, "month", "1 month"),
@@ -365,17 +365,6 @@ def main():
                         if vol_path:
                             all_saved_paths.append(vol_path)
 
-                    vol_backtest = artifacts.get("vol_backtest", {})
-                    if isinstance(vol_backtest, dict) and vol_backtest:
-                        bt_path = plot_volatility_backtest(
-                            ticker,
-                            vol_backtest,
-                            save=True,
-                            horizon_suffix=horizon_safe,
-                        )
-                        if bt_path:
-                            all_saved_paths.append(bt_path)
-                    
                     # Save CSVs (validation + test)
                     test_metrics = artifacts.get("all_metrics", {})
                     val_metrics = artifacts.get("validation_metrics", {})
@@ -713,13 +702,6 @@ def main():
             saved_paths.append(vol_path)
             print(f"Volatility forecast plot saved to: {vol_path}")
 
-    vol_backtest = artifacts.get("vol_backtest", {})
-    if args.save_plot and isinstance(vol_backtest, dict) and vol_backtest:
-        bt_path = plot_volatility_backtest(ticker, vol_backtest, save=True, horizon_suffix=horizon_label_safe)
-        if bt_path:
-            saved_paths.append(bt_path)
-            print(f"Volatility backtest plot saved to: {bt_path}")
-    
     # 3. Model comparison CSVs (validation + test)
     test_metrics = artifacts.get("all_metrics", {})
     val_metrics = artifacts.get("validation_metrics", {})

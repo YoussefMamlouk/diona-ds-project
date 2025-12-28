@@ -12,18 +12,22 @@ This project implements and compares multiple forecasting models to predict fina
 1. **Random Walk with Drift** (baseline) - Simple mean return model
 2. **AR(1)** - Autoregressive model of order 1
 3. **ARIMA** - Auto-selected ARIMA model (or fixed AR(1) for daily horizons)
-4. **Ridge / Lasso / ElasticNet** - Regularized linear baselines with lag + exogenous features
+4. **Ridge / Lasso / ElasticNet** - Regularized linear baselines (evaluation only)
 5. **XGBoost Regressor** - Machine learning model with lag features and exogenous variables
 
+**Note:** Linear baselines are reported in backtests for comparison; the production forecast uses Random Walk, AR(1), ARIMA, or XGBoost.
+
 ### Volatility Prediction
-- **GARCH(1,1)** - Generalized Autoregressive Conditional Heteroskedasticity model for volatility forecasting
+- **GJR-GARCH(1,1)** with Student-t innovations (fallback to standard GARCH if needed)
+- **EWMA baseline** for volatility backtest comparison
 
 ## Evaluation Methodology
 
 - **Time-series aware train/validation/test split** - Ensures no data leakage
 - **Model selection** - Choose the best model on the **validation set** using **RMSE**
 - **Final evaluation** - Refit the selected model on **train + validation**, then evaluate once on the **test set**
-- **Metrics**: RMSE, MAE, MAPE
+- **Return metrics**: RMSE, MAE, MAPE
+- **Volatility metrics**: RMSE, MAE (annualized), QLIKE (variance loss)
 - **Baseline comparison** - Explicit comparison against random walk baseline
 
 ## Setup
@@ -64,22 +68,20 @@ No prompts, no arguments needed - fully automated!
 ### Advanced Usage
 
 ```bash
-# Run only EDA (skip forecasting)
+# Run only EDA
 python main.py --eda
-
-# Run only forecasting (skip EDA)
-python main.py --no-eda
-
-# Run with specific horizon (non-interactive)
-python main.py --horizon "10 days"      # Short-term
-python main.py --horizon "3 months"    # Medium-term
-python main.py --horizon "1 year"      # Long-term
 
 # Disable ML models (statistical models only)
 python main.py --no-ml
 
 # Adjust number of Monte Carlo scenarios
 python main.py --n-scenarios 1000
+
+# Override download period (when downloads are enabled)
+python main.py --extra-history "10y"
+
+# Force cache-only mode (no downloads)
+python main.py --cache-only
 ```
 
 **Note:** The project is configured to use only TSLA (Tesla) data from the `data/raw/` folder for reproducibility. The ticker cannot be changed.
@@ -87,22 +89,19 @@ python main.py --n-scenarios 1000
 ### Command Line Options
 
 - `--use-sample-data` - Use synthetic data (for testing, not used by default)
-- `--eda` - Run only EDA analysis
-- `--no-eda` - Skip EDA, only run forecasting
+- `--eda` - Run EDA only
+- `--eda-period` - Data period for EDA (default: "5y")
+- `--demo` - Deterministic demo run on standard horizons
 - `--all-horizons` - Run forecasts for all horizon types (default behavior)
-- `--horizon` - Specify single horizon (e.g., "10 days", "3 months", "1 year")
 - `--n-scenarios` - Number of Monte Carlo scenarios (default: 500)
 - `--no-ml` - Disable XGBoost (statistical models only)
 - `--save` - Save all plots and outputs (default behavior)
 - `--cache-only` - Never download data; rely on cached CSV in data/raw/ (default behavior)
+- `--extra-history` - Override download period when downloads are enabled
 
 ### Supported Forecast Horizons
-The system supports forecasting for any horizon:
-- **Short-term**: Days (e.g., "10 days", "30 days")
-- **Medium-term**: Weeks or months (e.g., "4 weeks", "3 months")
-- **Long-term**: Months or years (e.g., "6 months", "1 year")
-
-Note: For very long horizons (>1 year), forecasts become less precise and the system will warn you.
+The CLI reports a fixed grid of horizons for comparability:
+- **10 days**, **1 month**, **3 months**, **6 months**, **1 year**
 
 ## Outputs
 
@@ -151,17 +150,19 @@ The project generates the following outputs in the `results/` directory:
 
 2. **Volatility Forecast Plot** (`volatility_forecast_<TICKER>_<HORIZON>_<TIMESTAMP>.png`)
    - Historical rolling volatility
-   - GARCH(1,1) forecasted volatility
+   - GARCH-based (GJR-GARCH) forecasted volatility
 
-3. **Model Comparison CSV** (`model_comparison_<TICKER>_<HORIZON>_<TIMESTAMP>.csv`)
+3. **Model Comparison CSVs**
+   - Validation: `model_comparison_validation_<TICKER>_<HORIZON>_<TIMESTAMP>.csv`
+   - Test: `model_comparison_test_<TICKER>_<HORIZON>_<TIMESTAMP>.csv`
    - RMSE, MAE, MAPE for each model
    - Indicates whether ML models beat the baseline
 
 ## Data
 
-- **Data source**: Cached TSLA (Tesla) data from `data/raw/yfinance_cache_TSLA.csv`
-- **Reproducibility**: The project uses only the pre-saved Tesla data for consistent, reproducible results
-- **Offline capability**: Works entirely offline using cached data - no downloads or API calls
+- **Data source**: Cached TSLA (Tesla) data from `data/raw/`
+- **Reproducibility**: Default run uses only cached data (no downloads)
+- **Offline capability**: Works entirely offline using cached data or `--use-sample-data`
 - **No API keys required**: The project does not use any external APIs or require API keys
 - **Fixed ticker**: The project is configured to work only with TSLA data for reproducibility
 
@@ -172,8 +173,12 @@ The project generates the following outputs in the `results/` directory:
 ├── main.py                 # Main entry point
 ├── src/
 │   ├── data_loader.py     # Data fetching and preprocessing
-│   ├── models.py          # Model implementations (AR(1), ARIMA, XGBoost)
-│   └── evaluation.py       # Backtesting, forecasting, and plotting
+│   ├── models.py          # Model implementations (AR(1), ARIMA, XGBoost, linear baselines)
+│   ├── backtests.py       # Return backtests and model selection
+│   ├── volatility.py      # Volatility backtests (GARCH vs EWMA)
+│   ├── plots.py           # Forecast and volatility plots
+│   ├── results.py         # CSV output and results cleanup
+│   └── evaluation.py      # Forecasting orchestration (returns + volatility)
 ├── data/
 │   └── raw/               # Raw data storage
 ├── results/               # Generated outputs (plots, CSVs)
@@ -185,7 +190,7 @@ The project generates the following outputs in the `results/` directory:
 
 The project is designed for maximum reproducibility:
 - **Fixed ticker**: Always uses TSLA (Tesla) data from `data/raw/` folder
-- **Cached data only**: Uses pre-saved data, no downloads or API calls
+- **Cached data by default**: Uses pre-saved data; downloads only if cache-only is disabled
 - **Pinned package versions**: All package versions are pinned to exact versions in `environment.yml` to ensure consistent results across devices
 - **Random seeds**: All random seeds are set to ensure reproducibility:
   - NumPy: `np.random.seed(42)` (set before all model training)

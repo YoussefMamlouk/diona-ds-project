@@ -13,7 +13,7 @@ The code evaluates whether ML (XGBoost) provides measurable gains over statistic
 
 Data
 ----
-Primary price data is sourced from Yahoo Finance (via `yfinance`). For offline and deterministic runs, the codebase supports `--use-sample-data`. Exogenous features include volume, momentum indicators, and rolling historical volatility.
+Primary price data is sourced from Yahoo Finance (via `yfinance`) and cached for reproducibility. The default run uses cached TSLA data (fixed ticker) and does not download; optional synthetic data is available via `--use-sample-data`. Exogenous features include volume, momentum indicators, and rolling historical volatility.
 
 Methods
 -------
@@ -27,7 +27,7 @@ Methods
 2. **AR(1)** with optional exogenous variables
 3. **ARIMA** (fixed AR(1) for daily horizons; auto-selected otherwise)
 4. **XGBoost Regressor** with lag and exogenous features
-5. **Linear baselines** (Ridge/Lasso/ElasticNet)
+5. **Linear baselines** (Ridge/Lasso/ElasticNet, evaluation only)
 
 **Volatility Prediction:**
 - **GJR-GARCH(1,1)** with Student-t innovations on daily returns
@@ -58,7 +58,7 @@ Deliverables
 - Model comparison CSVs (validation and test)
 - Price forecast plots with confidence bands
 - Volatility forecast plots (historical vs GARCH)
-- Volatility backtest plots (realized vs forecast vs baseline)
+- Volatility backtest summary table (GARCH vs EWMA baseline)
 - EDA report and plots
 - Technical report summarizing methodology, results, and limitations
 

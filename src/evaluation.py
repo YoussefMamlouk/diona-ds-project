@@ -1,11 +1,11 @@
 """
-Evaluation module: model training, backtesting, forecasting, and Monte Carlo simulation.
+Evaluation module: orchestrates return forecasting, volatility estimation, and Monte Carlo simulation.
 
-This module coordinates the forecasting pipeline by:
-- Training ARIMA/XGBoost models on historical data
-- Running backtests to select the best performer
-- Generating forecasts with uncertainty quantification via Monte Carlo
-- Adapting to long vs short horizon characteristics
+This module:
+- Fits/uses AR(1), ARIMA, and XGBoost to produce return forecasts
+- Runs return backtests (via src.backtests) for model selection
+- Estimates forward volatility with GARCH and runs volatility backtests
+- Exposes plotting and results helpers via re-exports from dedicated modules
 """
 from .models import (
     forecast_from_arima,
