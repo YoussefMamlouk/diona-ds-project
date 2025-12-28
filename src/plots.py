@@ -252,10 +252,10 @@ def plot_forecast(
 
     if simulated_daily is not None and len(simulated_daily) > 0:
         plt.plot(simulated_daily.index, simulated_daily.values, color="red", linewidth=1.6, label="Simulated Daily Path (volatility)")
-        plt.plot(forecast_series.index, forecast_series.values, color="red", marker="o", linestyle="None", markersize=5, label="Point Forecast (period)")
+        plt.plot(forecast_series.index, forecast_series.values, color="red", linestyle="None", label="_nolegend_")
         plt.plot([last_date, forecast_series.index[0]], [last_price, float(forecast_series.iloc[0])], color="red", linestyle=":", linewidth=1.0)
     else:
-        plt.plot(extended_dates, extended_forecast, label="Forecasted Prices", color="red", marker="o", markersize=5)
+        plt.plot(extended_dates, extended_forecast, label="Forecasted Prices", color="red")
 
     if len(historical_prices) > 0:
         plot_start = historical_prices.index[0]
@@ -401,37 +401,68 @@ def plot_volatility_forecast(
             except Exception:
                 sigma_points = sigma_daily_clean.iloc[:: max(1, int(len(sigma_daily_clean) / max(1, len(sigma_forecast))))].copy()
 
-        plt.plot(
-            sigma_daily_clean.index,
-            sigma_daily_clean.values,
-            label="GARCH(1,1) Forecast (daily, annualized)",
-            color="red",
-            linewidth=2,
-            alpha=0.85,
-            zorder=3,
-        )
-        plt.plot(
-            sigma_points.index,
-            sigma_points.values,
-            label="GARCH Forecast (horizon points)",
-            color="darkred",
-            linewidth=0,
-            marker="o",
-            markersize=7,
-            zorder=5,
-        )
+        daily_color = "tomato"
+        same_index = False
+        try:
+            if sigma_points is not None and not sigma_points.empty:
+                same_index = sigma_points.index.equals(sigma_daily_clean.index)
+        except Exception:
+            same_index = False
+
+        if same_index:
+            plt.plot(
+                sigma_daily_clean.index,
+                sigma_daily_clean.values,
+                label="GARCH Forecast (annualized)",
+                color=daily_color,
+                linewidth=2,
+                alpha=0.85,
+                zorder=3,
+            )
+        else:
+            plt.plot(
+                sigma_daily_clean.index,
+                sigma_daily_clean.values,
+                label="GARCH(1,1) Forecast (daily, annualized)",
+                color=daily_color,
+                linewidth=2,
+                alpha=0.85,
+                zorder=3,
+            )
+            if sigma_points is not None and len(sigma_points) > 1:
+                plt.plot(
+                    sigma_points.index,
+                    sigma_points.values,
+                    label="GARCH Forecast (horizon)",
+                    color="darkred",
+                    linestyle="--",
+                    linewidth=1.6,
+                    alpha=0.8,
+                    zorder=5,
+                )
     else:
         sigma_points = sigma_forecast.replace([np.inf, -np.inf], np.nan).dropna()
-        plt.plot(
-            sigma_points.index,
-            sigma_points.values,
-            label="GARCH(1,1) Forecast (annualized)",
-            color="red",
-            linewidth=2,
-            marker="o",
-            markersize=6,
-            zorder=4,
-        )
+        if sigma_points is not None and len(sigma_points) == 1:
+            point_ts = sigma_points.index[0]
+            point_val = float(sigma_points.iloc[0])
+            span = pd.Timedelta(days=3)
+            plt.plot(
+                [point_ts - span, point_ts + span],
+                [point_val, point_val],
+                label="GARCH(1,1) Forecast (annualized)",
+                color="tomato",
+                linewidth=2,
+                zorder=4,
+            )
+        else:
+            plt.plot(
+                sigma_points.index,
+                sigma_points.values,
+                label="GARCH(1,1) Forecast (annualized)",
+                color="tomato",
+                linewidth=2,
+                zorder=4,
+            )
 
     if not rolling_vol.empty:
         last_hist_date = rolling_vol.index[-1]
