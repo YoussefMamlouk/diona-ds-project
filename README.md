@@ -63,41 +63,7 @@ This automatically runs:
 - Uses **cached TSLA data** from `data/raw/` folder for reproducibility
 - Saves all outputs to the `results/` directory
 
-No prompts, no arguments needed - fully automated!
-
-### Advanced Usage
-
-```bash
-# Run only EDA
-python main.py --eda
-
-# Disable ML models (statistical models only)
-python main.py --no-ml
-
-# Adjust number of Monte Carlo scenarios
-python main.py --n-scenarios 1000
-
-# Override download period (when downloads are enabled)
-python main.py --extra-history "10y"
-
-# Force cache-only mode (no downloads)
-python main.py --cache-only
-```
-
 **Note:** The project is configured to use only TSLA (Tesla) data from the `data/raw/` folder for reproducibility. The ticker cannot be changed.
-
-### Command Line Options
-
-- `--use-sample-data` - Use synthetic data (for testing, not used by default)
-- `--eda` - Run EDA only
-- `--eda-period` - Data period for EDA (default: "5y")
-- `--demo` - Deterministic demo run on standard horizons
-- `--all-horizons` - Run forecasts for all horizon types (default behavior)
-- `--n-scenarios` - Number of Monte Carlo scenarios (default: 500)
-- `--no-ml` - Disable XGBoost (statistical models only)
-- `--save` - Save all plots and outputs (default behavior)
-- `--cache-only` - Never download data; rely on cached CSV in data/raw/ (default behavior)
-- `--extra-history` - Override download period when downloads are enabled
 
 ### Supported Forecast Horizons
 The CLI reports a fixed grid of horizons for comparability:
@@ -224,15 +190,6 @@ conda activate stock-forecast
 ```
 
 This automatically installs Python 3.10.0 and all dependencies as specified in `environment.yml`.
-
-**Verifying your environment:**
-```bash
-python verify_versions.py
-```
-
-This script checks that:
-- Python version is exactly 3.10.0
-- All package versions match the pinned versions in `environment.yml`
 
 **Why Python 3.10.0?**
 - Matches the exact version specified in `environment.yml`

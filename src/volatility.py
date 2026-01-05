@@ -95,20 +95,9 @@ def backtest_garch_volatility(
             except Exception:
                 continue
 
-        scale = 1.0
         try:
-            unconditional_var = float(garch_fit.unconditional_variance)
-        except Exception:
-            unconditional_var = float(train_slice.var())
-        try:
-            train_trailing_var = train_slice.pow(2).rolling(window=rolling_window).sum().dropna()
-            target_mean_var = float(train_trailing_var.mean()) if not train_trailing_var.empty else float("nan")
-            if np.isfinite(target_mean_var) and np.isfinite(unconditional_var) and unconditional_var > 0:
-                scale = float(np.sqrt(max(target_mean_var / (rolling_window * unconditional_var), 0.0)))
-        except Exception:
-            scale = 1.0
-
-        try:
+            # Forecast variance for the rolling_window horizon
+            # GARCH forecast returns conditional variance in the same units as input (percent^2)
             var_data = garch_fit.forecast(horizon=rolling_window).variance
             if hasattr(var_data, 'values'):
                 var_arr = var_data.values
@@ -124,16 +113,48 @@ def backtest_garch_volatility(
                 continue
             var_path = np.asarray(var_path, dtype=float)
             var_path = np.maximum(var_path, 0.0)
+            # Sum the variance path to get total variance over the horizon
+            # This is correct for multi-step ahead variance forecasting
             sum_var_pct2 = float(np.nansum(var_path))
-            pred_var = float(max(sum_var_pct2 * (scale ** 2), 0.0))
+            pred_var = float(max(sum_var_pct2, 0.0))
         except Exception:
             continue
         pred_var_values.append(pred_var)
         pred_index.append(idx)
 
     garch_var = pd.Series(pred_var_values, index=pd.Index(pred_index)).replace([np.inf, -np.inf], np.nan).dropna()
-    realized_var = realized_forward_var.loc[garch_var.index].replace([np.inf, -np.inf], np.nan).dropna()
-    ewma_horizon_var = (ewma_var.shift(1) * rolling_window).loc[garch_var.index].replace([np.inf, -np.inf], np.nan).dropna()
+    
+    # Align realized variance with GARCH forecasts
+    # Ensure indices match before computing metrics
+    common_idx = garch_var.index.intersection(realized_forward_var.index)
+    if len(common_idx) < 5:
+        return {}
+    
+    realized_var = realized_forward_var.loc[common_idx].replace([np.inf, -np.inf], np.nan).dropna()
+    garch_var = garch_var.loc[common_idx].replace([np.inf, -np.inf], np.nan).dropna()
+    
+    # Re-align after dropping NaNs
+    common_idx = garch_var.index.intersection(realized_var.index)
+    if len(common_idx) < 5:
+        return {}
+    
+    garch_var = garch_var.loc[common_idx]
+    realized_var = realized_var.loc[common_idx]
+    
+    # Compute EWMA baseline: forward-looking variance over rolling_window
+    # EWMA variance at time t-1, scaled to rolling_window horizon
+    # This provides a fair comparison as it uses only information available at time t-1
+    ewma_horizon_var = (ewma_var.shift(1) * rolling_window).loc[common_idx].replace([np.inf, -np.inf], np.nan).dropna()
+    
+    # Final alignment of all series
+    final_common_idx = common_idx.intersection(ewma_horizon_var.index)
+    if len(final_common_idx) < 5:
+        return {}
+    
+    garch_var = garch_var.loc[final_common_idx]
+    realized_var = realized_var.loc[final_common_idx]
+    ewma_horizon_var = ewma_horizon_var.loc[final_common_idx]
+    
     if garch_var.empty or realized_var.empty:
         return {}
 
@@ -153,12 +174,15 @@ def backtest_garch_volatility(
     garch_metrics = _score(garch_var, realized_var)
     ewma_metrics = _score(ewma_horizon_var, realized_var)
 
-    common_index = garch_var.index.intersection(realized_var.index)
-    points = int(len(common_index))
+    # Use the already-aligned index (final_common_idx from above)
+    points = int(len(final_common_idx))
+    # Convert variance to annualized volatility (percent)
+    # sqrt(variance) gives volatility in same units as returns (percent)
+    # Multiply by sqrt(252/rolling_window) to annualize
     vol_scale = float(np.sqrt(252.0 / rolling_window))
-    realized_vol = np.sqrt(np.maximum(realized_var, 0.0)) * vol_scale
-    garch_vol = np.sqrt(np.maximum(garch_var, 0.0)) * vol_scale
-    ewma_vol = np.sqrt(np.maximum(ewma_horizon_var, 0.0)) * vol_scale
+    realized_vol = np.sqrt(np.maximum(realized_var.loc[final_common_idx], 0.0)) * vol_scale
+    garch_vol = np.sqrt(np.maximum(garch_var.loc[final_common_idx], 0.0)) * vol_scale
+    ewma_vol = np.sqrt(np.maximum(ewma_horizon_var.loc[final_common_idx], 0.0)) * vol_scale
 
     return {
         "rolling_window": int(rolling_window),

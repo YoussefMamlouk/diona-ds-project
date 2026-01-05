@@ -53,8 +53,7 @@ The tool reports results on a fixed grid of horizons for comparability:
 Deliverables
 ------------
 - Reproducible pipeline via `python main.py`
-- Offline mode with `--use-sample-data`
-- Environment files (`requirements.txt`, `environment.yml`)
+- Environment file: `environment.yml`
 - Model comparison CSVs (validation and test)
 - Price forecast plots with confidence bands
 - Volatility forecast plots (historical vs GARCH)

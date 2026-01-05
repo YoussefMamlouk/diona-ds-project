@@ -7,8 +7,6 @@ import pandas as pd
 import yfinance as yf
 from typing import Dict, Optional
 import os
-import hashlib
-import glob
 
 
 def _get_cache_filename(ticker: str, period: str, interval: str) -> str:
