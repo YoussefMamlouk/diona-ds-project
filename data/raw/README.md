@@ -12,13 +12,13 @@ This project uses financial market data from **Yahoo Finance** via the `yfinance
 - No data files need to be manually placed in this directory
 
 ### Offline Mode
-For offline use or deterministic results, use the `--use-sample-data` flag:
+The project runs in offline mode by default using cached data. Simply run:
 
 ```bash
-python main.py --demo --use-sample-data --save
+python main.py
 ```
 
-This generates synthetic but reproducible data without requiring internet access.
+This uses cached data from this directory for reproducible results without requiring internet access.
 
 ## Data Structure
 
@@ -29,15 +29,13 @@ When data is downloaded, it includes:
 
 ## Data Caching
 
-The `yfinance` library may cache data internally. For explicit caching or to avoid repeated API calls:
-1. Use the `--use-sample-data` flag for offline/deterministic mode
-2. The library's internal caching reduces redundant downloads
+The `yfinance` library may cache data internally. The project uses cached data by default for offline/deterministic mode. The library's internal caching reduces redundant downloads.
 
 ## Notes
 
 - **No manual data download required**: Data is fetched automatically
-- **Offline mode available**: Use `--use-sample-data` for offline use without internet
-- **Reproducible**: Sample data mode produces deterministic results
+- **Offline mode by default**: Uses cached data for offline use without internet
+- **Reproducible**: Cached data ensures deterministic results
 - **No API keys needed**: Yahoo Finance data is publicly available
 
 ## Data Caching

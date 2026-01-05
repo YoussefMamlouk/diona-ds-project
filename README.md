@@ -128,7 +128,7 @@ The project generates the following outputs in the `results/` directory:
 
 - **Data source**: Cached TSLA (Tesla) data from `data/raw/`
 - **Reproducibility**: Default run uses only cached data (no downloads)
-- **Offline capability**: Works entirely offline using cached data or `--use-sample-data`
+- **Offline capability**: Works entirely offline using cached data
 - **No API keys required**: The project does not use any external APIs or require API keys
 - **Fixed ticker**: The project is configured to work only with TSLA data for reproducibility
 
