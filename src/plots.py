@@ -321,8 +321,13 @@ def plot_volatility_forecast(
     raw_prices: Optional[pd.Series] = None,
     sigma_daily_forecast: Optional[pd.Series] = None,
     sigma_fitted: Optional[pd.Series] = None,
+    garch_model_label: str = "GARCH(1,1)",
 ) -> Optional[str]:
     """Plot historical volatility vs GARCH forecast."""
+    model_label = garch_model_label
+    if not isinstance(model_label, str) or not model_label.strip():
+        model_label = "GARCH(1,1)"
+    model_label = model_label.strip()
     daily_prices: Optional[pd.Series] = None
     if raw_prices is not None and len(raw_prices) > 0:
         try:
@@ -377,7 +382,7 @@ def plot_volatility_forecast(
             sigma_fitted_clean = sigma_fitted.replace([np.inf, -np.inf], np.nan).dropna()
             if len(sigma_fitted_clean) > 10:
                 hist_series = sigma_fitted_clean
-                hist_label = "GARCH Fitted Volatility (in-sample, annualized)"
+                hist_label = f"{model_label} Fitted Volatility (in-sample, annualized)"
         except Exception:
             pass
 
@@ -413,7 +418,7 @@ def plot_volatility_forecast(
             plt.plot(
                 sigma_daily_clean.index,
                 sigma_daily_clean.values,
-                label="GARCH Forecast (annualized)",
+                label=f"{model_label} Forecast (annualized)",
                 color=daily_color,
                 linewidth=2,
                 alpha=0.85,
@@ -423,7 +428,7 @@ def plot_volatility_forecast(
             plt.plot(
                 sigma_daily_clean.index,
                 sigma_daily_clean.values,
-                label="GARCH(1,1) Forecast (daily, annualized)",
+                label=f"{model_label} Forecast (daily, annualized)",
                 color=daily_color,
                 linewidth=2,
                 alpha=0.85,
@@ -433,7 +438,7 @@ def plot_volatility_forecast(
                 plt.plot(
                     sigma_points.index,
                     sigma_points.values,
-                    label="GARCH Forecast (horizon)",
+                    label=f"{model_label} Forecast (horizon)",
                     color="darkred",
                     linestyle="--",
                     linewidth=1.6,
@@ -449,7 +454,7 @@ def plot_volatility_forecast(
             plt.plot(
                 [point_ts - span, point_ts + span],
                 [point_val, point_val],
-                label="GARCH(1,1) Forecast (annualized)",
+                label=f"{model_label} Forecast (annualized)",
                 color="tomato",
                 linewidth=2,
                 zorder=4,
@@ -458,7 +463,7 @@ def plot_volatility_forecast(
             plt.plot(
                 sigma_points.index,
                 sigma_points.values,
-                label="GARCH(1,1) Forecast (annualized)",
+                label=f"{model_label} Forecast (annualized)",
                 color="tomato",
                 linewidth=2,
                 zorder=4,
@@ -516,7 +521,7 @@ def plot_volatility_forecast(
 
         plt.xlim(xlim_start, xlim_end)
 
-    plt.title(f"{ticker} Volatility Forecast: Historical vs GARCH(1,1)")
+    plt.title(f"{ticker} Volatility Forecast: Historical vs {model_label}")
     plt.xlabel("Date")
     plt.ylabel("Volatility (Annualized %)")
     plt.legend()
@@ -531,63 +536,6 @@ def plot_volatility_forecast(
             filename = f"volatility_forecast_{ticker}_{horizon_suffix}_{timestamp}.png"
         else:
             filename = f"volatility_forecast_{ticker}_{timestamp}.png"
-        saved_path = os.path.join(results_dir, filename)
-        plt.savefig(saved_path, bbox_inches="tight", dpi=150)
-    plt.close()
-    return saved_path
-
-
-def plot_volatility_backtest(
-    ticker: str,
-    vol_backtest: Dict[str, object],
-    save: bool = False,
-    horizon_suffix: str = "",
-) -> Optional[str]:
-    """Plot backtest predicted vs realized volatility for the holdout window."""
-    if not isinstance(vol_backtest, dict):
-        return None
-    series = vol_backtest.get("series", {})
-    if not isinstance(series, dict):
-        return None
-
-    realized = series.get("realized_vol")
-    garch = series.get("garch_vol")
-    baseline_ewma = series.get("baseline_ewma_vol")
-    if not isinstance(realized, pd.Series) or not isinstance(garch, pd.Series):
-        return None
-    if realized.empty or garch.empty:
-        return None
-
-    window = vol_backtest.get("rolling_window")
-    window_label = f"H={int(window)}" if isinstance(window, int) else "H"
-    plt.figure(figsize=(12, 6))
-    plt.plot(realized.index, realized.values, label=f"Realized Forward Vol ({window_label})", color="black", linewidth=1.6)
-    plt.plot(garch.index, garch.values, label="GARCH Forecast", color="red", linewidth=1.8)
-    if isinstance(baseline_ewma, pd.Series) and not baseline_ewma.empty:
-        plt.plot(
-            baseline_ewma.index,
-            baseline_ewma.values,
-            label="Baseline",
-            color="darkgray",
-            linestyle=":",
-            linewidth=1.4,
-        )
-
-    plt.title(f"{ticker} Volatility Backtest")
-    plt.xlabel("Date")
-    plt.ylabel("Volatility (Annualized %)")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-
-    saved_path = None
-    if save:
-        results_dir = os.path.join(os.getcwd(), "results")
-        os.makedirs(results_dir, exist_ok=True)
-        timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-        if horizon_suffix:
-            filename = f"volatility_backtest_{ticker}_{horizon_suffix}_{timestamp}.png"
-        else:
-            filename = f"volatility_backtest_{ticker}_{timestamp}.png"
         saved_path = os.path.join(results_dir, filename)
         plt.savefig(saved_path, bbox_inches="tight", dpi=150)
     plt.close()

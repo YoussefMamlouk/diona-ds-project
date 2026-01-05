@@ -15,7 +15,7 @@ from .models import (
 )
 from .backtests import run_backtest
 from .volatility import backtest_garch_volatility
-from .plots import plot_forecast, plot_volatility_forecast, plot_volatility_backtest
+from .plots import plot_forecast, plot_volatility_forecast
 from .results import save_model_comparison_csv, clean_old_results
 import numpy as np
 import pandas as pd
@@ -253,10 +253,12 @@ def generate_forecast(
     # Set random seed before GARCH fitting for reproducibility
     np.random.seed(42)
     # Prefer asymmetric GARCH with heavy tails; fall back to standard GARCH if needed.
+    garch_model_label = "GJR-GARCH(1,1)"
     try:
         garch = arch_model(returns, vol="GARCH", p=1, o=1, q=1, dist="t")
         garch_fit = garch.fit(disp="off", options={'maxiter': 1000, 'disp': False})
     except Exception:
+        garch_model_label = "GARCH(1,1)"
         garch = arch_model(returns, vol="GARCH", p=1, o=0, q=1, dist="normal")
         garch_fit = garch.fit(disp="off", options={'maxiter': 1000, 'disp': False})
 
@@ -549,6 +551,7 @@ def generate_forecast(
         "sigma_forecast": sigma_forecast,
         "sigma_daily_forecast": sigma_daily_forecast,
         "sigma_fitted": sigma_fitted,
+        "garch_model_label": garch_model_label,
         "vol_backtest": vol_backtest,
         "last_price": last_price,
         "forecast_returns": forecast_returns,

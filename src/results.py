@@ -66,7 +66,6 @@ def clean_old_results(ticker: str) -> None:
     patterns = [
         f"forecast_{ticker}_*.png",
         f"volatility_forecast_{ticker}_*.png",
-        f"volatility_backtest_{ticker}_*.png",
         f"model_comparison_*_{ticker}_*.csv",
         f"model_comparison_{ticker}_*.csv",
         f"eda_*_{ticker}_*.png",

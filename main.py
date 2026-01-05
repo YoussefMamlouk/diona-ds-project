@@ -361,6 +361,7 @@ def main():
                             raw_prices=raw_prices,
                             sigma_daily_forecast=artifacts.get("sigma_daily_forecast"),
                             sigma_fitted=artifacts.get("sigma_fitted"),
+                            garch_model_label=artifacts.get("garch_model_label"),
                         )
                         if vol_path:
                             all_saved_paths.append(vol_path)
@@ -608,7 +609,8 @@ def main():
     
     # Volatility Forecast Section
     print("\n" + "-"*70)
-    print(" " * 20 + "VOLATILITY FORECAST (GARCH)")
+    garch_model_label = artifacts.get("garch_model_label") or "GARCH(1,1)"
+    print(" " * 20 + f"VOLATILITY FORECAST ({garch_model_label})")
     print("-"*70)
     if sigma_forecast is not None and not sigma_forecast.empty:
         avg_vol = float(sigma_forecast.mean())
@@ -625,7 +627,7 @@ def main():
         else:
             vol_level = "LOW"
         print(f"{'Volatility Level:':<35} {vol_level}")
-        print(f"\n  Note: Volatility forecast based on GARCH(1,1) model")
+        print(f"\n  Note: Volatility forecast based on {garch_model_label} model")
         print(f"        Higher volatility indicates greater price uncertainty")
         vol_backtest = artifacts.get("vol_backtest", {})
         if isinstance(vol_backtest, dict) and vol_backtest:
@@ -642,7 +644,7 @@ def main():
                 print(f"\n{label:<35} RMSE {rmse_str}, MAE {mae_str}, QLIKE {qlike_str}")
             garch_m = metrics.get("garch", {})
             if garch_m:
-                _print_vol_line("Vol Backtest (GARCH):", garch_m)
+                _print_vol_line(f"Vol Backtest ({garch_model_label}):", garch_m)
             ewma_m = metrics.get("baseline_ewma", {})
             if ewma_m:
                 _print_vol_line("Vol Backtest (Baseline):", ewma_m)
@@ -697,10 +699,14 @@ def main():
             raw_prices=raw_prices,
             sigma_daily_forecast=artifacts.get("sigma_daily_forecast"),
             sigma_fitted=artifacts.get("sigma_fitted"),
+            garch_model_label=artifacts.get("garch_model_label"),
         )
         if vol_path:
             saved_paths.append(vol_path)
             print(f"Volatility forecast plot saved to: {vol_path}")
+
+    print("Has gamma?", any("gamma" in str(k) for k in garch_fit.params.index))
+
 
     # 3. Model comparison CSVs (validation + test)
     test_metrics = artifacts.get("all_metrics", {})
