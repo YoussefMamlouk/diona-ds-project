@@ -1,0 +1,580 @@
+% Advanced Programming 2025 - Project Report
+% HEC Lausanne / UNIL
+\documentclass[11pt,a4paper]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+\usepackage{fancyhdr}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage{csquotes}
+
+% References
+\usepackage[backend=biber,style=authoryear]{biblatex}
+\addbibresource{references.bib} % Create this file for your references
+
+% Code listing settings
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{pythonstyle}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showstringspaces=false,
+    tabsize=2,
+    language=Python
+}
+\lstset{style=pythonstyle}
+
+% Header and footer
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Advanced Programming 2025}
+\lhead{Project Report}
+\rfoot{Page \thepage}
+\setlength{\headheight}{13.6pt}
+
+% Title page information
+\title{%
+    \Large \textbf{Advanced Programming 2025} \\
+    \vspace{0.5cm}
+    \LARGE \textbf{Machine Learning Model Comparison for Financial Asset Return and Volatility Forecasting} \\
+    \vspace{0.3cm}
+    \large Final Project Report
+}
+\author{%
+    Diona Avdija \\
+    \texttt{diona.avdija@unil.ch} \\
+    Student ID: 22435333
+}
+\date{January 4, 2026}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\begin{abstract}
+\noindent
+This project evaluates the predictability of equity returns and volatility using a reproducible forecasting pipeline. We focus on a high-volatility equity (Tesla, TSLA) as the empirical setting. We compare a random-walk benchmark with AR(1), auto-selected ARIMA, regularized linear models, and XGBoost across horizons from 10 days to 1 year. Model selection is performed strictly on a validation window to avoid leakage, then refit on train+validation and tested on out-of-sample price-level errors. Return forecasting remains difficult: most models fail to consistently beat the random walk once realistic time-series validation is enforced. By contrast, volatility forecasts are consistently more reliable. A GJR-GARCH(1,1) model with Student-$t$ innovations outperforms EWMA across all horizons and provides reliable uncertainty bands for Monte Carlo price simulations. Overall, the results highlight the limits of return predictability and the practical value of volatility modeling for risk assessment.
+\end{abstract}
+
+\vspace{0.5cm}
+\noindent\textbf{Keywords:} data science, Python, machine learning, time-series forecasting, equity returns, volatility modeling, ARIMA, GARCH, XGBoost, Monte Carlo simulation
+
+\newpage
+\tableofcontents
+\newpage
+
+% ================== MAIN CONTENT ==================
+
+\section{Introduction}
+\label{sec:introduction}
+\begingroup
+\setlength{\parskip}{0.35\baselineskip}
+\setlength{\parindent}{1.25em}
+
+\hspace*{\parindent}Forecasting asset prices and their volatility is a central problem in financial modeling and risk management. Accurate volatility forecasts are critical for derivative pricing, portfolio risk control, and Value at Risk (VaR) estimation, while reliable return forecasts would offer direct value for investment decisions. Despite extensive academic and practical effort, predicting equity returns remains notoriously difficult, largely due to the efficient market hypothesis, which asserts that asset prices incorporate available information and therefore follow a near-random walk \parencite{Fama1970}. In contrast, volatility often exhibits persistence and clustering, suggesting that second-moment dynamics may be forecastable even when mean returns are not.
+
+\noindent This project assesses the relative performance of traditional econometric models and modern machine learning methods for forecasting equity returns and volatility across multiple horizons. Using Tesla (TSLA) stock data, we evaluate whether increased model flexibility translates into improved predictive accuracy, and we build a reproducible end-to-end pipeline that integrates model estimation, validation-based selection, and Monte Carlo simulation for uncertainty quantification. The evaluation explicitly follows instructor guidance: model selection is performed on a validation set, and regularized linear baselines are included to mitigate overfitting in noisy return data.
+
+\noindent Tesla is an informative test case because it combines high volatility, sharp regime shifts, and heavy retail attention. These features amplify the difficulty of return prediction while providing a clear signal for volatility dynamics. Framing the project around a single asset allows for a focused, reproducible experiment that highlights what is and is not forecastable in practice.
+
+\noindent The report is organized as follows. Section~\ref{sec:research-question} states the research question and reviews related work. Section~\ref{sec:methodology} describes the methodology and algorithmic framework. Section~\ref{sec:implementation} discusses the implementation, and Section~\ref{sec:maintenance} explains how the codebase is maintained and updated. Section~\ref{sec:results} presents the empirical results, and Section~\ref{sec:conclusion} concludes.
+\endgroup
+
+\section{Research Question and Related Literature}
+\label{sec:research-question}
+\begingroup
+\setlength{\parskip}{0.35\baselineskip}
+\setlength{\parindent}{1.25em}
+
+\hspace*{\parindent}Research question. Can standard econometric models and modern machine learning methods deliver return forecasts that beat a random walk benchmark, and can volatility models provide reliable risk estimates across multiple horizons for a high-volatility equity? We study this question using TSLA as a demanding empirical setting and evaluate all models under a strict time-series validation protocol.
+
+\noindent The literature draws a clear distinction between return predictability and volatility predictability. Under market efficiency, excess returns are difficult to forecast, and the random walk with drift is a hard-to-beat benchmark \parencite{Fama1970}. Empirical studies show that linear predictability in daily returns is weak and unstable across time and assets \parencite{Campbell1997,Hansen2005}. Large-scale out-of-sample comparisons also find that many popular predictors fail to beat the historical mean when evaluated in real time, reinforcing the robustness of simple baselines \parencite{Welch2008}.
+
+\noindent Volatility, by contrast, exhibits strong persistence and clustering. The ARCH framework \parencite{Engle1982} and its generalization to GARCH \parencite{Bollerslev1986} model conditional variance directly and have become standard tools for forecasting risk. Asymmetric extensions such as GJR-GARCH \parencite{Glosten1993} capture leverage effects, where negative returns increase volatility more than positive returns of the same magnitude, and have demonstrated improved performance in equity data \parencite{Hansen2005}. Survey evidence consistently ranks GARCH-type models among the most reliable practical tools for volatility prediction \parencite{Poon2003}, and realized-volatility frameworks further highlight the persistence of second-moment dynamics in equities \parencite{Andersen2003}.
+
+\noindent Machine learning methods capture nonlinearities in structured data. Gradient-boosted trees such as XGBoost \parencite{Chen2016} are a common example. However, out-of-sample performance in finance is mixed, with many reported gains disappearing under strict time-series validation. Recent empirical studies on financial prediction emphasize that ML models can add value in some settings but are sensitive to sample size, nonstationarity, and validation design \parencite{Gu2020,Krauss2017}. This motivates careful evaluation protocols and strong benchmarks when comparing ML approaches to econometric baselines.
+\endgroup
+
+\section{Methodology and Algorithmic Framework}
+\label{sec:methodology}
+
+\subsection{Data Description}
+\label{subsec:data}
+
+\paragraph{Source and collection.}
+We use Tesla, Inc. (TSLA) as a representative high-volatility equity. Historical market data are collected from Yahoo Finance via \texttt{yfinance} and stored locally as a cached CSV snapshot (\texttt{data/raw/yfinance\_cache\_TSLA.csv}). The initial prototype supported arbitrary tickers via live API calls, but the final pipeline uses a fixed local cache to ensure reproducibility and avoid API rate-limit interruptions.
+
+\paragraph{Sample size and characteristics.}
+The cached dataset contains 1,256 daily observations spanning 2020-12-14 to 2025-12-12, with standard OHLCV fields. The EDA summary reports zero missing values and zero zero-volume days in the cached sample.
+
+\paragraph{Target variables.}
+Let $P_t$ denote the adjusted close price at date $t$. Daily log-returns are computed as
+\begin{equation}
+\label{eq:logret}
+ r_t = \log\left(\frac{P_t}{P_{t-1}}\right).
+\end{equation}
+Return forecasting targets $r_t$ at each horizon, computed on resampled price series (monthly: last price in the month with month-start index). Volatility forecasting is modeled separately: the GARCH component targets conditional variance of daily returns, and evaluation uses realized variance/volatility derived from daily returns.
+
+\paragraph{Summary statistics.}
+Table~\ref{tab:data-summary} summarizes key properties from the cached sample (computed on daily log-returns).
+
+\begin{table}[H]
+\centering
+\caption{TSLA dataset summary (cached sample).}
+\label{tab:data-summary}
+\begin{tabular}{l r}
+\toprule
+Item & Value \\
+\midrule
+Date range & 2020-12-14 to 2025-12-12 \\
+Trading days & 1,256 \\
+Current price & 452.41 USD \\
+Mean daily return & 0.1328\% \\
+Std. dev. daily return & 3.8315\% \\
+Annualized volatility & 60.82\% \\
+Min / Max daily return & -15.43\% / 22.69\% \\
+Missing values & 0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+\noindent The EDA also reports skewness and kurtosis and runs normality tests (Jarque-Bera and Shapiro-Wilk when applicable). Both tests reject normality (p-values $< 0.001$), indicating heavy tails; this motivates Student-$t$ innovations in the GARCH model and cautions against strict normality assumptions in return forecasting.
+
+\subsection{Approach}
+\label{subsec:approach}
+
+\subsubsection{Forecast horizons and resampling}
+We evaluate five horizons: 10 trading days, 1 month, 3 months, 6 months, and 1 year. Monthly horizons are interpreted in trading time using 21 business days per month, consistent with the implementation.
+
+\begin{table}[H]
+\centering
+\caption{Forecast horizons and trading-day convention.}
+\label{tab:horizons}
+\begin{tabular}{l c c c}
+\toprule
+Horizon & Unit & Steps & Trading days per step \\
+\midrule
+10 days & daily & 10 & 1 \\
+1 month & monthly & 1 & 21 \\
+3 months & monthly & 3 & 21 \\
+6 months & monthly & 6 & 21 \\
+1 year & monthly & 12 & 21 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Feature construction}
+All predictors are computed causally (using information available at time $t$):
+\begin{itemize}
+    \item Lagged returns $\{r_{t-1},\dots,r_{t-5}\}$ for ML and regularized regressions.
+    \item Normalized volume (z-score): proxy for liquidity and trading intensity.
+    \item Momentum: rolling mean of simple returns over 5 and 10 days, capturing short-term trend effects.
+    \item Historical volatility: 21-day rolling standard deviation of daily log-returns, annualized and aligned to the forecast index, capturing recent risk regime and volatility clustering (see Appendix~\ref{app:figures}).
+\end{itemize}
+These variables are used as optional exogenous regressors for AR(1), ARIMA, and the ML baselines. Feature design is intentionally simple and transparent: the goal is to test whether widely used technical signals (volume, momentum, recent volatility) add incremental forecasting power without introducing look-ahead bias or complex data dependencies. All rolling statistics are computed with past information only and aligned to the forecast index to maintain causal integrity.
+
+\subsubsection{Return forecasting models}
+\paragraph{Random walk with drift.} The benchmark assumes constant expected return equal to the in-sample mean:
+\begin{equation}
+\hat r_{t+h|t} = \bar r_{\text{train}} \quad \forall h=1,\dots,H.
+\end{equation}
+
+\paragraph{AR(1).} Autoregressive dynamics are modeled as
+\begin{equation}
+ r_t = \mu + \phi r_{t-1} + \varepsilon_t.
+\end{equation}
+For daily horizons this is implemented as ARIMA$(1,0,0)$, with optional exogenous regressors.
+
+\paragraph{ARIMA (auto-selected).} For non-daily horizons (monthly in this project), model order $(p,d,q)$ is selected by \texttt{auto\_arima} using information criteria (non-seasonal).
+
+\paragraph{Regularized linear models.} Ridge, Lasso, and Elastic Net regressions are included to counteract low signal-to-noise ratios in returns. Models are trained on lagged returns and exogenous features with time-series cross-validation to select regularization strength.
+
+\paragraph{XGBoost.} Gradient-boosted trees are trained with a small deterministic grid and time-series CV when enough data are available. Forecasting is iterative: one-step predictions are fed back as lagged inputs for multi-step horizons.
+
+\subsubsection{Volatility forecasting}
+Volatility is modeled separately from returns. We fit a GJR-GARCH$(1,1)$ model with Student-$t$ innovations when possible, falling back to a symmetric GARCH$(1,1)$ with Gaussian errors if optimization fails. The Student-$t$ choice is motivated by the heavy tails observed in the return distribution.
+\begin{equation}
+\sigma_t^2 = \omega + \alpha \varepsilon_{t-1}^2 + \gamma \mathbb{I}_{\{\varepsilon_{t-1}<0\}}\varepsilon_{t-1}^2 + \beta \sigma_{t-1}^2.
+\end{equation}
+To keep units consistent, GARCH is always fit on daily returns, and daily variance forecasts are aggregated to the target horizon:
+\begin{equation}
+\widehat{\mathrm{Var}}\left(\sum_{j=1}^{m} r_{t+j}\right) \approx \sum_{j=1}^{m} \hat v_{t+j|t},
+\qquad
+\hat\sigma_{\text{step}} = \sqrt{\sum_{j=1}^{m} \hat v_{t+j|t}}.
+\end{equation}
+An EWMA benchmark is included with $\lambda=0.94$. This is the classic RiskMetrics decay factor and provides a strong, industry-standard baseline for volatility forecasting.
+\begin{equation}
+\sigma_t^2 = \lambda \sigma_{t-1}^2 + (1-\lambda) r_{t-1}^2.
+\end{equation}
+Volatility backtests compare forecasts to forward realized variance computed over a rolling window aligned to the horizon, and we evaluate the most recent year of usable points for stability and comparability across horizons.
+
+\subsubsection{Model selection and evaluation}
+We use a strict chronological split tailored to the horizon $H$: the final $H$ observations form the test set, the preceding $H$ observations form the validation set, and the remaining initial segment is used for training. Model selection is based on validation RMSE, and final metrics are computed on the test set after refitting on train+validation to avoid test leakage.
+\begin{center}
+\small\textbf{Selection flow:} validation $\rightarrow$ refit on train+validation $\rightarrow$ final test evaluation
+\end{center}
+Forecasts are evaluated on price levels by compounding predicted log-returns:
+\begin{equation}
+\hat P_{t+h} = P_t \exp\left(\sum_{j=1}^{h}\hat r_{t+j|t}\right).
+\end{equation}
+We report RMSE and MAE on prices because investment decisions and baseline comparisons are naturally framed in price levels rather than raw returns. MAPE is provided in Appendix~\ref{app:figures} for interpretability. For AR(1) and XGBoost, results with MAPE at or above 100\% are dropped to avoid extreme failures dominating selection. Volatility backtests additionally report the QLIKE loss on variance forecasts, computed as
+\begin{equation}
+\mathrm{QLIKE}(v,\hat v) = \log(\hat v) + \frac{v}{\hat v},
+\end{equation}
+which matches the implementation (constant terms are omitted since they do not affect model ranking).
+
+\subsubsection{Uncertainty quantification}
+Monte Carlo simulation combines point forecasts with volatility estimates. For each scenario $s$:
+\begin{equation}
+\tilde r^{(s)}_{t+h} = \hat r_{t+h|t} + \hat\sigma_{t+h|t} z_h^{(s)}, \quad z_h^{(s)} \sim \mathcal{N}(0,1),
+\end{equation}
+\begin{equation}
+\tilde P^{(s)}_{t+h} = P_t \exp\left(\sum_{j=1}^{h} \tilde r^{(s)}_{t+j}\right).
+\end{equation}
+For long horizons, the point forecast for AR(1) and ARIMA is replaced by the historical drift to avoid unrealistic mean-reversion, and a mild 1.25 volatility scaling is applied to the Monte Carlo bands to avoid under-dispersed uncertainty.
+
+\section{Implementation}
+\label{sec:implementation}
+
+\paragraph{Languages and libraries.}
+The project is implemented in Python 3.10.0 using \texttt{pandas}/\texttt{numpy} (data handling), \texttt{statsmodels} and \texttt{pmdarima} (AR/ARIMA), \texttt{scikit-learn} (regularized models and time-series CV), \texttt{xgboost} (ML model), and \texttt{arch} (GARCH volatility).
+
+\paragraph{System architecture.}
+The pipeline is modular and CLI-driven. \texttt{main.py} orchestrates EDA, backtests, forecasting, plotting, and result export. Core modules include:
+\begin{itemize}
+    \item \texttt{data\_loader.py}: cached data loading, resampling, and feature construction.
+    \item \texttt{models.py}: AR(1), ARIMA helpers, regularized regressions, XGBoost training and forecasting.
+    \item \texttt{backtests.py}: train/validation/test backtest logic and metric computation.
+    \item \texttt{volatility.py}: GARCH and EWMA volatility backtests.
+    \item \texttt{evaluation.py}: end-to-end forecasting and Monte Carlo simulation.
+    \item \texttt{plots.py}, \texttt{results.py}: visualization and CSV artifact export.
+\end{itemize}
+
+\paragraph{Reproducibility controls.}
+Determinism is enforced through fixed seeds, single-thread execution (OMP/BLAS environment variables are set to 1), and cached data. Running \texttt{python main.py} triggers the deterministic pipeline (EDA + all horizons) using the fixed TSLA snapshot in \texttt{data/raw/}.
+
+\begin{lstlisting}[caption={Reproducibility controls (excerpt).}]
+# main.py (top-level setup)
+os.environ["PYTHONHASHSEED"] = "0"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+
+np.random.seed(42)
+args.cache_only = True
+\end{lstlisting}
+
+\section{Maintenance and Updating the Codebase}
+\label{sec:maintenance}
+The repository is versioned with git, enabling traceable changes to data, code, and report text. Dependencies are pinned in \texttt{environment.yml} (conda) and \texttt{requirements.txt} (pip), and the README provides the canonical setup commands. To refresh the dataset, replace the cached CSV in \texttt{data/raw/yfinance\_cache\_TSLA.csv} with a new snapshot and rerun \texttt{python main.py}. All outputs are written to \texttt{results/} with timestamps to preserve run history. The project does not include a formal unit-test suite; instead, the end-to-end pipeline serves as a reproducible regression check. Future maintenance could add unit tests around data loading, horizon settings, and metric computations.
+
+\section{Results}
+\label{sec:results}
+
+\subsection{Experimental Setup}
+The evaluation uses the cached TSLA dataset described in Section~\ref{subsec:data}. Models are evaluated on price-level errors (USD) using RMSE and MAE; MAPE is reported in Appendix~\ref{app:figures}. Monte Carlo uses 500 scenarios per horizon. All artifacts (plots and CSVs) are written under \texttt{results/}.
+\begin{itemize}
+    \item Fixed horizon grid: 10 days, 1 month, 3 months, 6 months, 1 year.
+    \item Monte Carlo scenarios: 500 per horizon.
+\end{itemize}
+
+\subsection{Performance Evaluation}
+Tables~\ref{tab:rmse-validation} and~\ref{tab:rmse-test} report the validation selection step and the final test evaluation.
+
+\paragraph{Return forecasting results.}
+Return forecasting is the most challenging part of the pipeline. The signal-to-noise ratio in daily equity returns is low, and small changes in training windows or horizons can alter model rankings. The validation-based protocol therefore plays a central role: it prevents selecting models that only look good in hindsight. In the code, model selection is based on the smallest validation RMSE (price-level errors), then the chosen model is refit on train+validation and evaluated once on the test set.
+
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.0}
+\caption{Validation model selection by lowest RMSE.}
+\label{tab:rmse-validation}
+\begin{tabular}{l l r}
+\toprule
+Horizon & Lowest RMSE model & Val RMSE \\
+\midrule
+10 days  & ElasticNet & 22.35 \\
+1 month  & Random walk & 6.73 \\
+3 months & ARIMA & 28.56 \\
+6 months & ARIMA & 59.25 \\
+1 year   & ARIMA & 49.70 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent For each horizon, we run all available models (random walk baseline, regularized linear models, AR/ARIMA, and XGBoost when available) and select the one with the lowest validation RMSE. Table~\ref{tab:rmse-validation} summarizes these selections: ElasticNet is chosen at 10 days, the random walk at 1 month, and ARIMA from 3 months onward. This pattern suggests that ARIMA is comparatively strong at longer horizons within the set of models that can be reliably estimated.
+
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.0}
+\caption{Test set after refit: validation-selected model vs. random walk baseline (RMSE).}
+\label{tab:rmse-test}
+\begin{tabular}{l l r r l}
+\toprule
+Horizon & Model & Model RMSE & RW RMSE & Beats RW? \\
+\midrule
+10 days  & ElasticNet & 19.63 & 17.54 & No \\
+1 month  & Random walk & 31.09 & 31.09 & Baseline \\
+3 months & ARIMA & 110.48 & 103.18 & No \\
+6 months & ARIMA & 72.15 & 66.43 & No \\
+1 year   & ARIMA & 66.37 & 62.44 & No \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent Although ARIMA appears strong in Table~\ref{tab:rmse-validation}, Table~\ref{tab:rmse-test} shows no horizon where the validation-selected model beats the random walk on test (the 1-month case is a tie). In fact, ARIMA’s refit RMSE is higher than the random walk at 3, 6, and 12 months. This reinforces the idea that, once we enforce a realistic time-series protocol, returns are difficult to forecast with stable gains over simple benchmarks, consistent with the empirical literature and the instructor’s guidance.
+
+\noindent Second, the diagnostic table in Appendix~\ref{app:figures} shows that the random walk is not always the lowest-RMSE model on test: ARIMA is best at 1 month and XGBoost at 3 months (Table~\ref{tab:rmse-test-best}). These results are not used for selection, but they suggest ML can add value at intermediate horizons. Because these gains are not reliably identified by validation, we keep them diagnostic to avoid test leakage.
+
+\noindent Overall, the evidence points to the same conclusion: return forecasts should be treated as weak signals, while uncertainty, driven by volatility, carries most of the actionable information. Practically, return models are best used as inputs to scenario analysis rather than as standalone point-forecast engines.
+
+\paragraph{Volatility forecasting results.}
+Volatility forecasts are produced with daily GJR-GARCH dynamics and aggregated to each horizon for Monte Carlo uncertainty bands. Table~\ref{tab:volatility} reports out-of-sample backtests for GARCH versus the EWMA baseline. We report RMSE and MAE to summarize absolute forecast errors, and QLIKE to assess variance calibration, which is the most relevant property for risk modeling. GARCH outperforms EWMA at every horizon on all three metrics, with the advantage widening at longer horizons; by 1 year, RMSE and MAE are roughly halved relative to the baseline. These results confirm that volatility is a reliably forecastable component even when mean returns are not, and they are practically important because volatility directly affects option pricing, structured product design, and risk management decisions.
+
+\begin{table}[H]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.0}
+\caption{Volatility backtest (annualized, TSLA).}
+\label{tab:volatility}
+\begin{tabular}{l r r r r r r}
+\toprule
+ & \multicolumn{2}{c}{RMSE} & \multicolumn{2}{c}{MAE} & \multicolumn{2}{c}{QLIKE} \\
+Horizon & GARCH & $\Delta$ & GARCH & $\Delta$ & GARCH & $\Delta$ \\
+\midrule
+10 days  & 21.73\% & -0.72 & 17.63\% & -0.20 & 6.06 & -0.01 \\
+1 month  & 19.14\% & -1.81 & 15.36\% & -1.08 & 6.83 & -0.03 \\
+3 months & 18.29\% & -3.07 & 15.43\% & -2.47 & 8.08 & -0.05 \\
+6 months & 16.46\% & -3.86 & 13.46\% & -2.99 & 8.87 & -0.06 \\
+1 year   & 9.84\%  & -7.67 & 8.59\%  & -6.85 & 9.50 & -0.19 \\
+\bottomrule
+\end{tabular}
+\caption*{\footnotesize$\Delta$ = GARCH -- EWMA.}
+\end{table}
+
+Two patterns stand out. First, the performance gap widens with horizon length, which is consistent with volatility persistence: longer horizons average out short-term noise and allow mean reversion to dominate, so the asymmetric GARCH structure has more room to add value. Second, the QLIKE metric remains consistently better for GARCH, indicating improved variance calibration rather than just lower error in volatility units. This matters for risk management because it directly affects the width of Monte Carlo prediction bands and the plausibility of tail scenarios. In short, the backtests provide strong evidence that volatility is a reliably forecastable component in this dataset, even when mean returns are not.
+
+\subsection{Horizon-Specific Observations}
+The horizon analysis highlights different failure modes and strengths across models:
+\begin{itemize}
+    \item \textbf{10 days:} The random walk baseline is hard to beat; even the best regularized model only marginally improves validation metrics and loses on the test set. Volatility accuracy is also tight here, with GARCH only slightly ahead of EWMA, reflecting short-horizon noise.
+    \item \textbf{1 month:} ARIMA delivers the lowest test RMSE, but it is not selected in validation. This illustrates how sensitive selection is to short validation windows. Volatility gains become clearer, with GARCH improving RMSE and MAE over EWMA.
+    \item \textbf{3 months:} XGBoost performs best on the test set, suggesting nonlinear signals can matter at intermediate horizons, yet validation does not reliably identify this gain. Volatility gaps widen further, consistent with stronger persistence at longer horizons.
+    \item \textbf{6 months and 1 year:} Performance converges back to the random walk, and model differences shrink. This is also where data scarcity after resampling most limits ML methods. Volatility forecasting is strongest here, with GARCH delivering the largest error reductions relative to EWMA.
+\end{itemize}
+Overall, the horizon breakdown reinforces the core narrative: return predictability is fragile, while volatility predictability improves as the horizon increases.
+
+\subsection{Visualizations}
+Forecast and volatility plots are generated automatically under \texttt{results/}. Example figures are included below using copies stored alongside the report.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth,height=0.28\textheight,keepaspectratio]{../results/forecast_TSLA_1_year_20260106T182007Z.png}
+\caption{One-year price forecast with Monte Carlo bands (TSLA).}
+\label{fig:forecast}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth,height=0.28\textheight,keepaspectratio]{../results/volatility_forecast_TSLA_1_year_20260106T182007Z.png}
+\caption{One-year volatility forecast (annualized, TSLA).}
+\label{fig:vol}
+\end{figure}
+
+\subsection{Case Study: One-Year Horizon}
+\begingroup
+\setlength{\parskip}{0.35\baselineskip}
+\setlength{\parindent}{1.25em}
+\hspace*{\parindent}Figures~\ref{fig:forecast}--\ref{fig:vol} summarize the one-year case: expected returns stay close to a drift, while uncertainty expands rapidly as the volatility path evolves. This is the most demanding setting for any return model because it combines fewer training observations (due to monthly resampling) with the cumulative effect of forecast errors. In our pipeline, the expected return component is anchored to the historical drift, while uncertainty is driven by the GARCH volatility path. This design choice is deliberate: it avoids unrealistic mean-reversion in ARIMA-style forecasts and puts the emphasis on risk rather than on a fragile point estimate.
+
+\noindent From a practical perspective, the one-year forecast should be read as a distribution rather than a single price target. The median path reflects the drift, while the 10th and 90th percentiles provide a plausible range for downside and upside scenarios. This framing is closer to how risk managers interpret long-horizon forecasts: the width of the fan conveys the degree of uncertainty, and the volatility model determines how quickly that fan expands.
+
+\noindent This case study also illustrates why the volatility component is the strongest part of the project. Even if the mean return is hard to predict, the conditional variance exhibits persistence and provides a stable signal. As a result, the pipeline yields informative risk bands that can be used for stress testing, scenario analysis, and communication of uncertainty to end users.
+\endgroup
+
+\section{Discussion}
+\label{sec:discussion}
+\begingroup
+\setlength{\parskip}{0.5\baselineskip}
+\setlength{\parindent}{1.25em}
+
+\hspace*{\parindent}The results are consistent with established findings in the return-predictability literature. Short-horizon returns behave close to a random walk, and the baseline often dominates more complex models. At intermediate horizons, some models can deliver improvements on the test set, but these gains are not reliably identified by validation-based selection, underscoring the instability of predictive signals in financial data. This aligns with long-standing evidence that AR and ARIMA models rarely beat the random walk in returns forecasting \parencite{Fama1970,Campbell1997,Hansen2005}. The 3-month horizon illustrates the risk: XGBoost performs well on the test set but is not selected by validation, suggesting sensitivity to noisy patterns rather than stable predictive structure.
+
+\noindent The machine-learning results highlight a structural constraint: as horizons lengthen and data are resampled to monthly frequency, the effective training sample shrinks and recursive forecasting errors compound. In the current run, AR(1) and XGBoost drop out of the 6-month validation split and the 1-year test split because the pipeline excludes models with failed fits or extreme errors (MAPE $\geq$ 100\%), which becomes more likely when the monthly resampling leaves too few points.
+
+\noindent Even with regularization and time-series CV, tree-based models can latch onto transient patterns that do not persist. This is not a failure of the implementation; it is a realistic outcome of the data-generating process for equity returns.
+
+\noindent To mitigate this, we considered keeping daily predictors while forecasting long-horizon returns to preserve a larger training sample. We ultimately rejected this option because it mixes time scales, complicates alignment, and would change the definition of the forecasting task, making comparisons across horizons less consistent.
+
+\noindent Volatility modeling shows clearer structure. Even when return forecasts are weak, volatility forecasts provide coherent uncertainty estimates and help generate realistic prediction intervals for prices. This supports the practical value of modeling conditional variance separately from mean returns and is consistent with the evidence in the volatility-forecasting literature.
+
+\noindent From an applied perspective, the pipeline is most valuable as a risk-forecasting tool rather than a return-forecasting engine. The practical output is not a single best price but a distribution of plausible paths, which is more aligned with real portfolio and risk management decisions.
+
+\noindent Some plots show a visible gap between the end of the historical series and the start of the forecast. After inspection, this is expected: the forecast begins at the next valid period boundary (e.g., the next month-start index), so the first forecast point is not anchored to the last observed date. We keep this gap to avoid implying continuity or backfilling; forcing the lines to touch would misrepresent the timing of the forecast. An illustrative example is provided in Appendix Figure~\ref{fig:forecast-gap}.
+
+\begin{itemize}
+\setlength{\itemsep}{0.1\baselineskip}
+    \item Return models are best interpreted as weak signals or scenario inputs, not as precise point forecasts.
+    \item Volatility dynamics are stable enough to provide actionable risk bands, especially for medium and long horizons.
+    \item Validation-based selection is essential; test-set selection would have favored models that did not generalize.
+\end{itemize}
+
+Limitations include the focus on a single asset (TSLA), a restricted set of engineered features, and reliance on a single train/validation/test split per horizon. Extending the study to multiple assets, adding macro or cross-sectional predictors, and using rolling-origin evaluation would strengthen robustness and generalizability.
+\endgroup
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+\subsection{Summary}
+\begingroup
+\setlength{\parskip}{0.5\baselineskip}
+\setlength{\parindent}{1.25em}
+\hspace*{\parindent}This project delivers a reproducible forecasting pipeline and a transparent comparison of econometric and machine learning models for TSLA return and volatility forecasting. Across horizons, the random walk baseline remains a strong benchmark, and selection based on validation RMSE does not always generalize to the test set. The results therefore reinforce a core empirical message: return predictability is fragile, while volatility dynamics are more stable and forecastable.
+
+\noindent Methodologically, the pipeline emphasizes time-series integrity, reproducibility, and probabilistic outputs. The Monte Carlo layer and volatility modeling make long-horizon forecasts usable as risk bands rather than single price targets.
+
+\noindent In short, the project succeeds more as a risk-forecasting and uncertainty-quantification tool than as a return-forecasting engine.
+\endgroup
+
+\subsection{Future Directions}
+\begin{itemize}
+\setlength{\itemsep}{0pt}
+\setlength{\topsep}{0pt}
+\setlength{\parskip}{0pt}
+\setlength{\partopsep}{0pt}
+    \item Expand to multiple tickers and market regimes.
+    \item Add exogenous features (macro, sector indices, options-implied vol).
+    \item Use rolling-origin backtests to characterize performance distributions.
+    \item Explore alternative ML and probabilistic return models.
+\end{itemize}
+
+% ================== REFERENCES ==================
+\newpage
+\setlength{\bibitemsep}{0.5\baselineskip}
+\printbibliography
+
+% ================== APPENDICES ==================
+\newpage
+\appendix
+\renewcommand{\thetable}{A.\arabic{table}}
+\renewcommand{\thefigure}{A.\arabic{figure}}
+\setcounter{table}{0}
+\setcounter{figure}{0}
+
+\section{Additional Figures}
+\label{app:figures}
+
+Supplementary figures and diagnostics can be placed here.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{../results/eda_returns_distribution_TSLA_20260106T181947Z.png}
+\caption{EDA: return distribution and normality diagnostics (TSLA).}
+\label{fig:eda-returns}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{../results/eda_volatility_TSLA_20260106T181947Z.png}
+\caption{EDA: 21-day rolling volatility showing clustering (TSLA).}
+\label{fig:eda-vol}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{../results/forecast_TSLA_3_months_20260106T181959Z.png}
+\caption{Example forecast gap at the horizon boundary (3-month forecast).}
+\label{fig:forecast-gap}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.0}
+\caption{Test selection model (diagnostic).}
+\label{tab:rmse-test-best}
+\begin{tabular}{l l r}
+\toprule
+Horizon & Lowest RMSE model & Test RMSE \\
+\midrule
+10 days  & Random walk & 17.54 \\
+1 month  & ARIMA & 26.39 \\
+3 months & XGBoost & 45.65 \\
+6 months & Random walk & 66.43 \\
+1 year   & Random walk & 62.44 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.0}
+\caption{Horizon summary for the validation-selected model (test MAPE after refit on train+validation).}
+\label{tab:diagnostic-summary}
+\begin{tabular}{l l r r l l}
+\toprule
+Horizon & Best model & MAPE & Expected return & Risk level & Signal quality \\
+\midrule
+10 days  & ElasticNet & 3.79\% & +1.16\% & HIGH & HIGH \\
+1 month  & Random walk & 7.23\% & +1.28\% & HIGH & MEDIUM \\
+3 months & ARIMA & 24.73\% & +3.71\% & HIGH & LOW \\
+6 months & ARIMA & 15.15\% & +8.56\% & HIGH & LOW \\
+1 year   & ARIMA & 16.12\% & +11.62\% & HIGH & LOW \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Code Repository}
+\label{app:code}
+
+\noindent
+\textbf{Repository:} \url{https://github.com/Dionavdj/asset-forecasting.git}
+
+\noindent
+The codebase is organized around \texttt{main.py} and the \texttt{src/} modules described in Section~\ref{sec:implementation}. Reproducibility is achieved via cached data and fixed random seeds. Follow the README to set up the environment; in brief:
+\begin{verbatim}
+conda env create -f environment.yml
+conda activate stock-forecast
+python main.py
+\end{verbatim}
+These steps install dependencies, activate the project environment, and run the pipeline end to end.
+
+\section{AI Usage}
+\label{app:ai}
+
+This project used AI tools for debugging, refactoring suggestions, documentation support, and editing of the report text for clarity and structure. All code, results, and written content were reviewed and verified by the author to comply with course guidelines. A usage log is provided in \texttt{AI\_USAGE.md}.
+
+\end{document}

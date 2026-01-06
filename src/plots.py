@@ -251,7 +251,7 @@ def plot_forecast(
     extended_forecast = [last_price] + list(forecast_series.values)
 
     if simulated_daily is not None and len(simulated_daily) > 0:
-        plt.plot(simulated_daily.index, simulated_daily.values, color="red", linewidth=1.6, label="Simulated Daily Path (volatility)")
+        plt.plot(simulated_daily.index, simulated_daily.values, color="red", linewidth=1.6, label="Simulated Daily Price Path")
         plt.plot(forecast_series.index, forecast_series.values, color="red", linestyle="None", label="_nolegend_")
         plt.plot([last_date, forecast_series.index[0]], [last_price, float(forecast_series.iloc[0])], color="red", linestyle=":", linewidth=1.0)
     else:

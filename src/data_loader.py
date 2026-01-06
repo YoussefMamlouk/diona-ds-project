@@ -221,8 +221,6 @@ def build_exog(
 def load_series_for_horizon(
 	ticker: str,
 	horizon_settings: Dict[str, object],
-	extra_history_period: Optional[str] = None,
-	use_sample_data: bool = False,
 	cache_only: bool = False,
 ) -> Dict[str, object]:
 	"""Fetch price series and prepare exogenous features.
@@ -230,85 +228,69 @@ def load_series_for_horizon(
 	`horizon_settings` should be the dict returned by `src.main.compute_horizon_settings`.
 	Returns a dict with `prices`, `raw_prices`, `log_returns`, `exog_df`, `volume`, `horizon_settings`.
 	"""
-	# If requested, create a small deterministic synthetic dataset for offline/demo use
-	if use_sample_data:
-		# deterministic RNG for sample generation
-		rs = np.random.RandomState(42)
-		# generate 180 business days up to today
-		dates = pd.bdate_range(end=pd.Timestamp.today(), periods=180)
-		prices_arr = 100.0 + rs.normal(loc=0.0, scale=1.0, size=len(dates)).cumsum()
-		raw_prices = pd.Series(data=prices_arr, index=dates)
-		volume = pd.Series(data=(100000 + rs.randint(-5000, 5000, size=len(dates))), index=dates)
-		data = None
+	# Always fetch daily data (most granular) and cache it
+	# This allows resampling to any interval (daily, weekly, monthly) from the same cache
+	# Calculate required download period based on horizon
+	# For caching: always fetch enough daily data, then resample as needed
+	# This ensures we have enough data for any horizon
+	mode = horizon_settings["mode"]
+	invested_days = horizon_settings["invested_days"]
+	if mode == "D":
+		download_days = int(max(math.ceil(invested_days * 2.5), 365))
+	elif mode == "W":
+		download_days = int(max(math.ceil(invested_days * 3), 730))
+	else:  # monthly
+		download_days = int(max(math.ceil(invested_days * 5), 1095))
+	
+	# Map to yfinance period
+	if download_days <= 90:
+		download_period = "90d"
+	elif download_days <= 180:
+		download_period = "6mo"
+	elif download_days <= 365:
+		download_period = "1y"
+	elif download_days <= 730:
+		download_period = "2y"
+	elif download_days <= 1095:
+		download_period = "3y"
+	elif download_days <= 1825:
+		download_period = "5y"
 	else:
-		# Always fetch daily data (most granular) and cache it
-		# This allows resampling to any interval (daily, weekly, monthly) from the same cache
-		# Calculate required download period based on horizon
-		if extra_history_period is not None:
-			download_period = extra_history_period
-		else:
-			# For caching: always fetch enough daily data, then resample as needed
-			# This ensures we have enough data for any horizon
-			mode = horizon_settings["mode"]
-			invested_days = horizon_settings["invested_days"]
-			if mode == "D":
-				download_days = int(max(math.ceil(invested_days * 2.5), 365))
-			elif mode == "W":
-				download_days = int(max(math.ceil(invested_days * 3), 730))
-			else:  # monthly
-				download_days = int(max(math.ceil(invested_days * 5), 1095))
-			
-			# Map to yfinance period
-			if download_days <= 90:
-				download_period = "90d"
-			elif download_days <= 180:
-				download_period = "6mo"
-			elif download_days <= 365:
-				download_period = "1y"
-			elif download_days <= 730:
-				download_period = "2y"
-			elif download_days <= 1095:
-				download_period = "3y"
-			elif download_days <= 1825:
-				download_period = "5y"
-			else:
-				download_period = "10y"
-		
-		# Always fetch daily data for maximum flexibility
-		# Pass the requested interval for display, but fetch daily and resample
-		# The cache always stores daily data
-		data = fetch_yfinance(
-			ticker,
-			download_period,
-			horizon_settings["interval"],
-			use_cache=True,
-			cache_only=cache_only,
-		)
+		download_period = "10y"
+	
+	# Always fetch daily data for maximum flexibility
+	# Pass the requested interval for display, but fetch daily and resample
+	# The cache always stores daily data
+	data = fetch_yfinance(
+		ticker,
+		download_period,
+		horizon_settings["interval"],
+		use_cache=True,
+		cache_only=cache_only,
+	)
 
-		if data.empty:
-			return {"prices": pd.Series(dtype=float), "raw_prices": pd.Series(dtype=float), "log_returns": pd.Series(dtype=float), "exog_df": pd.DataFrame(), "volume": pd.Series(dtype=float), "horizon_settings": horizon_settings}
+	if data.empty:
+		return {"prices": pd.Series(dtype=float), "raw_prices": pd.Series(dtype=float), "log_returns": pd.Series(dtype=float), "exog_df": pd.DataFrame(), "volume": pd.Series(dtype=float), "horizon_settings": horizon_settings}
 
 	# pick price and volume
-	if not use_sample_data:
-		if isinstance(data.columns, pd.MultiIndex):
-			if ("Adj Close", ticker) in data.columns:
-				raw_prices = data[("Adj Close", ticker)].dropna()
-			elif ("Close", ticker) in data.columns:
-				raw_prices = data[("Close", ticker)].dropna()
-			else:
-				# fallback to first numeric column
-				cols = [c for c in data.columns if c[0] in ("Adj Close", "Close")]
-				raw_prices = data[cols[0]].dropna() if cols else pd.Series(dtype=float)
-			volume = data.get(("Volume", ticker), pd.Series(dtype=float)).dropna()
+	if isinstance(data.columns, pd.MultiIndex):
+		if ("Adj Close", ticker) in data.columns:
+			raw_prices = data[("Adj Close", ticker)].dropna()
+		elif ("Close", ticker) in data.columns:
+			raw_prices = data[("Close", ticker)].dropna()
 		else:
-			if "Adj Close" in data.columns:
-				raw_prices = data["Adj Close"].dropna()
-			elif "Close" in data.columns:
-				raw_prices = data["Close"].dropna()
-			else:
-				raw_prices = pd.Series(dtype=float)
-			volume = data.get("Volume", pd.Series(dtype=float)).dropna()
-	# if using sample data, `raw_prices` and `volume` were created earlier
+			# fallback to first numeric column
+			cols = [c for c in data.columns if c[0] in ("Adj Close", "Close")]
+			raw_prices = data[cols[0]].dropna() if cols else pd.Series(dtype=float)
+		volume = data.get(("Volume", ticker), pd.Series(dtype=float)).dropna()
+	else:
+		if "Adj Close" in data.columns:
+			raw_prices = data["Adj Close"].dropna()
+		elif "Close" in data.columns:
+			raw_prices = data["Close"].dropna()
+		else:
+			raw_prices = pd.Series(dtype=float)
+		volume = data.get("Volume", pd.Series(dtype=float)).dropna()
 
 	raw_prices.index = pd.to_datetime(raw_prices.index)
 
@@ -364,12 +346,6 @@ def compute_horizon_settings(value: float, unit: str) -> Dict[str, object]:
 		interval = "1d"
 		freq = "B"
 		invested_days = steps
-	elif unit == "week":
-		steps = max(1, int(math.ceil(value)))
-		mode = "W"
-		interval = "1wk"
-		freq = "W-FRI"
-		invested_days = steps * 5
 	elif unit == "month":
 		steps = max(1, int(math.ceil(value)))
 		mode = "M"
@@ -386,14 +362,10 @@ def compute_horizon_settings(value: float, unit: str) -> Dict[str, object]:
 	# Choose a download period that gives enough historical points for
 	# resampling and backtesting. Fetch more data for medium/long-term forecasting.
 	# For monthly horizons: at least 2 years of history (24+ monthly observations)
-	# For weekly horizons: at least 2 years of history (104+ weekly observations)
 	# For daily horizons: at least 1 year for short-term, more for longer horizons
 	if mode == "D":
 		# For daily: fetch at least 1 year, or 2x the forecast horizon (whichever is larger)
 		download_days = int(max(math.ceil(invested_days * 2.5), 365))
-	elif mode == "W":
-		# For weekly: fetch at least 2 years (104 weeks) for proper backtesting
-		download_days = int(max(math.ceil(invested_days * 3), 730))
 	else:  # monthly
 		# For monthly: fetch at least 3 years (36 months) for proper backtesting
 		download_days = int(max(math.ceil(invested_days * 5), 1095))
@@ -427,4 +399,3 @@ def compute_horizon_settings(value: float, unit: str) -> Dict[str, object]:
 		"download_period": download_period,
 		"label": label,
 	}
-

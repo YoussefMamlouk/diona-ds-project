@@ -10,6 +10,7 @@ Scope of AI assistance:
 - Suggested and implemented refactorings to modularize code: `src/data_loader.py`, `src/evaluation.py`, `src/models.py`.
 - Implemented robust yfinance fetcher with fallbacks and retry logic.
 - Added demo and reproducibility improvements (seeding RNGs).
+- Edited report text for clarity and structure.
 
 What was NOT done by AI:
 - I validated, reviewed, and approved all code changes.

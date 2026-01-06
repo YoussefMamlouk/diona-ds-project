@@ -6,7 +6,6 @@ from typing import Dict, Optional
 import numpy as np
 import pandas as pd
 
-
 def _select_vol_backtest_window(horizon_days: int) -> int:
     """Select a realized-vol window that matches the forecast horizon scale."""
     if horizon_days <= 15:
@@ -26,7 +25,7 @@ def backtest_garch_volatility(
     rolling_window: Optional[int] = None,
     max_backtest_days: Optional[int] = 252,
 ) -> Dict[str, object]:
-    """Professional volatility backtest using rolling H-step forecasts.
+    """ volatility backtest using rolling H-step forecasts.
 
     Compares GARCH forecasts against forward realized variance and strong baselines.
     Metrics include QLIKE (variance loss) and RMSE/MAE in annualized volatility units.
@@ -197,3 +196,4 @@ def backtest_garch_volatility(
             "baseline_ewma_vol": ewma_vol,
         },
     }
+

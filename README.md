@@ -30,6 +30,13 @@ This project implements and compares multiple forecasting models to predict fina
 - **Volatility metrics**: RMSE, MAE (annualized), QLIKE (variance loss)
 - **Baseline comparison** - Explicit comparison against random walk baseline
 
+## Key Findings
+
+- **Returns**: After validation-based selection, no model consistently beats the random walk on the test set (the 1‑month case is a tie). This matches standard finance evidence that return predictability is weak.
+- **Volatility**: GJR‑GARCH consistently outperforms the EWMA baseline across horizons, indicating volatility is more reliably forecastable than returns.
+- **Diagnostics**: On the test set, ARIMA can win at 1 month and XGBoost at 3 months, but these wins are not used for selection to avoid test leakage.
+- **Relative vs absolute**: We report absolute errors (RMSE/MAE) and interpret models relative to the random‑walk baseline, which is the appropriate benchmark for return forecasting.
+
 ## Setup
 
 ### Prerequisites
@@ -61,9 +68,17 @@ This automatically runs:
 - **Exploratory Data Analysis (EDA)** with comprehensive plots and insights
 - **Forecasting for all horizons** (10 days, 1 month, 3 months, 6 months, 1 year)
 - Uses **cached TSLA data** from `data/raw/` folder for reproducibility
-- Saves all outputs to the `results/` directory
+- Saves outputs to the `results/` directory when `--save` is used
 
 **Note:** The project is configured to use only TSLA (Tesla) data from the `data/raw/` folder for reproducibility. The ticker cannot be changed.
+
+### Optional Flags
+
+```
+--save           Save plots/CSVs to results/ (off by default)
+--no-ml          Disable XGBoost (faster, more stable on small samples)
+--n-scenarios N  Monte Carlo scenarios (default 500)
+```
 
 ### Supported Forecast Horizons
 The CLI reports a fixed grid of horizons for comparability:
@@ -156,7 +171,7 @@ The project generates the following outputs in the `results/` directory:
 
 The project is designed for maximum reproducibility:
 - **Fixed ticker**: Always uses TSLA (Tesla) data from `data/raw/` folder
-- **Cached data by default**: Uses pre-saved data; downloads only if cache-only is disabled
+- **Cached data only**: Uses the fixed CSV snapshot in `data/raw/` (no downloads)
 - **Pinned package versions**: All package versions are pinned to exact versions in `environment.yml` to ensure consistent results across devices
 - **Random seeds**: All random seeds are set to ensure reproducibility:
   - NumPy: `np.random.seed(42)` (set before all model training)

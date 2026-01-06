@@ -13,7 +13,7 @@ The code evaluates whether ML (XGBoost) provides measurable gains over statistic
 
 Data
 ----
-Primary price data is sourced from Yahoo Finance (via `yfinance`) and cached for reproducibility. The default run uses cached TSLA data (fixed ticker) and does not download; optional synthetic data is available via `--use-sample-data`. Exogenous features include volume, momentum indicators, and rolling historical volatility.
+Primary price data is sourced from Yahoo Finance (via `yfinance`) and cached for reproducibility. The default run uses cached TSLA data (fixed ticker) and does not download. Exogenous features include volume, momentum indicators, and rolling historical volatility.
 
 Methods
 -------
