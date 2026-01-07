@@ -32,10 +32,10 @@ This project implements and compares multiple forecasting models to predict fina
 
 ## Key Findings
 
-- **Returns**: After validation-based selection, no model consistently beats the random walk on the test set (the 1‑month case is a tie). This matches standard finance evidence that return predictability is weak.
-- **Volatility**: GJR‑GARCH consistently outperforms the EWMA baseline across horizons, indicating volatility is more reliably forecastable than returns.
+- **Returns**: After validation-based selection, no model consistently beats the random walk on the test set (the 1-month case is a tie). This matches standard evidence that return predictability is weak.
+- **Volatility**: GJR-GARCH consistently outperforms the EWMA baseline across horizons, indicating volatility is more reliably forecastable than returns.
 - **Diagnostics**: On the test set, ARIMA can win at 1 month and XGBoost at 3 months, but these wins are not used for selection to avoid test leakage.
-- **Relative vs absolute**: We report absolute errors (RMSE/MAE) and interpret models relative to the random‑walk baseline, which is the appropriate benchmark for return forecasting.
+- **Relative vs absolute**: We report absolute errors (RMSE/MAE) and interpret models relative to the random walk baseline, which is the appropriate benchmark for return forecasting.
 
 ## Setup
 
@@ -210,10 +210,6 @@ This automatically installs Python 3.10.0 and all dependencies as specified in `
 - Matches the exact version specified in `environment.yml`
 - Prevents version-related discrepancies in numerical computations
 - Ensures maximum reproducibility across all devices
-
-## Key Findings
-
-The project explicitly compares all models against the random walk baseline. If machine learning models do not always outperform the baseline, this is documented as a valid finding (which is common in financial time series forecasting).
 
 ## License
 
