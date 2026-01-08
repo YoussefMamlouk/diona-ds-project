@@ -15,7 +15,7 @@ This project implements and compares multiple forecasting models to predict fina
 4. **Ridge / Lasso / ElasticNet** - Regularized linear baselines (evaluation only)
 5. **XGBoost Regressor** - Machine learning model with lag features and exogenous variables
 
-**Note:** Linear baselines are reported in backtests for comparison; the production forecast uses Random Walk, AR(1), ARIMA, or XGBoost.
+**Note:** Linear baselines are included in backtests and can be selected by validation; the production forecast uses the validation selected model, including linear baselines when selected.
 
 ### Volatility Prediction
 - **GJR-GARCH(1,1)** with Student-t innovations (fallback to standard GARCH if needed)
@@ -54,8 +54,6 @@ This automatically installs Python 3.10.0 and all dependencies.
 
 ## Usage
 
-### Basic Usage
-
 ### Simple Usage
 
 **Simply run the main file with no arguments:**
@@ -67,7 +65,7 @@ python main.py
 This automatically runs:
 - **Exploratory Data Analysis (EDA)** with comprehensive plots and insights
 - **Forecasting for all horizons** (10 days, 1 month, 3 months, 6 months, 1 year)
-- Uses **cached TSLA data** from `data/raw/` folder for reproducibility
+- Uses cached TSLA data from `data/raw/` for reproducibility (downloads once if missing)
 - Saves outputs to the `results/` directory when `--save` is used
 
 **Note:** The project is configured to use only TSLA (Tesla) data from the `data/raw/` folder for reproducibility. The ticker cannot be changed.
@@ -78,6 +76,7 @@ This automatically runs:
 --save           Save plots/CSVs to results/ (off by default)
 --no-ml          Disable XGBoost (faster, more stable on small samples)
 --n-scenarios N  Monte Carlo scenarios (default 500)
+--cache-only     Use cached data only (no downloads)
 ```
 
 ### Supported Forecast Horizons
@@ -141,9 +140,9 @@ The project generates the following outputs in the `results/` directory:
 
 ## Data
 
-- **Data source**: Cached TSLA (Tesla) data from `data/raw/`
-- **Reproducibility**: Default run uses only cached data (no downloads)
-- **Offline capability**: Works entirely offline using cached data
+- **Data source**: Cached TSLA (Tesla) data from `data/raw/` (initially sourced via Yahoo Finance)
+- **Reproducibility**: Default run uses cached data; if missing, the pipeline downloads once and saves a local snapshot
+- **Offline capability**: Works fully offline after the cache is populated
 - **No API keys required**: The project does not use any external APIs or require API keys
 - **Fixed ticker**: The project is configured to work only with TSLA data for reproducibility
 
@@ -162,8 +161,8 @@ The project generates the following outputs in the `results/` directory:
 │   └── evaluation.py      # Forecasting orchestration (returns + volatility)
 ├── data/
 │   └── raw/               # Raw data storage
+├── report/                # LaTeX report and compiled PDF
 ├── results/               # Generated outputs (plots, CSVs)
-├── notebooks/             # Exploratory notebooks
 └── environment.yml        # Conda environment file
 ```
 
@@ -171,7 +170,7 @@ The project generates the following outputs in the `results/` directory:
 
 The project is designed for maximum reproducibility:
 - **Fixed ticker**: Always uses TSLA (Tesla) data from `data/raw/` folder
-- **Cached data only**: Uses the fixed CSV snapshot in `data/raw/` (no downloads)
+- **Cached data**: Uses the fixed CSV snapshot in `data/raw/` and only downloads on cache miss
 - **Pinned package versions**: All package versions are pinned to exact versions in `environment.yml` to ensure consistent results across devices
 - **Random seeds**: All random seeds are set to ensure reproducibility:
   - NumPy: `np.random.seed(42)` (set before all model training)
@@ -183,16 +182,6 @@ The project is designed for maximum reproducibility:
   - `PYTHONHASHSEED=0` for hash-based operations
   - `OMP_NUM_THREADS=1` and related threading vars for single-threaded BLAS
 - **No user input**: No prompts or interactive elements - fully deterministic execution
-
-### Verifying Package Versions
-
-To ensure your environment matches the expected versions, run:
-
-```bash
-python verify_versions.py
-```
-
-This script checks that all installed packages match the pinned versions in `environment.yml`.
 
 ### Setting Up the Environment
 
@@ -210,6 +199,10 @@ This automatically installs Python 3.10.0 and all dependencies as specified in `
 - Matches the exact version specified in `environment.yml`
 - Prevents version-related discrepancies in numerical computations
 - Ensures maximum reproducibility across all devices
+
+### Report PDF
+
+The report PDF can be opened with any standard PDF viewer. The final report is `report/final_report.pdf`. Recompiling the LaTeX source requires a TeX distribution (e.g., MacTeX).
 
 ## License
 

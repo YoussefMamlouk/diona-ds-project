@@ -18,7 +18,7 @@ Primary price data is sourced from Yahoo Finance (via `yfinance`) and cached for
 Methods
 -------
 **Preprocessing:**
-- Resample prices to the target horizon (daily/weekly/monthly)
+- Resample prices to the target horizon (daily/monthly)
 - Compute log-returns and align exogenous variables
 - Add a rolling 21-day historical volatility feature
 

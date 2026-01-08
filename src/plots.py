@@ -33,7 +33,7 @@ def plot_forecast(
     plt.figure(figsize=(10, 5))
 
     # Load original daily data for plotting (not resampled)
-    # raw_prices may be resampled for monthly/weekly forecasts, so fetch daily data
+    # raw_prices may be resampled for monthly forecasts, so fetch daily data
     try:
         from .data_loader import fetch_yfinance
         daily_data = fetch_yfinance(ticker, "5y", "1d", use_cache=True)
@@ -214,7 +214,7 @@ def plot_forecast(
         infer = pd.infer_freq(forecast_series.index)
     except Exception:
         infer = None
-    is_period_horizon = infer in ("MS", "W-FRI") or ("month" in horizon_suffix) or ("year" in horizon_suffix) or ("week" in horizon_suffix)
+    is_period_horizon = infer in ("MS",) or ("month" in horizon_suffix) or ("year" in horizon_suffix)
 
     returns_are_constant = False
     if forecast_returns is not None:

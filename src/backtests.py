@@ -64,7 +64,7 @@ def run_backtest(
     # Need at least 3x forecast_periods for train/val/test split
     min_required = forecast_periods * 3 + 20
     if len(log_returns) < min_required:
-        return "random_walk", None, "unknown", {}
+        return "random_walk", None, "unknown", {}, {}
 
     # Time-series aware split: train / validation / test
     # Test set: last forecast_periods
@@ -75,7 +75,7 @@ def run_backtest(
     train_size = len(log_returns) - val_size - test_size
 
     if train_size < 20:
-        return "random_walk", None, "unknown", {}
+        return "random_walk", None, "unknown", {}, {}
 
     # Split data chronologically (no shuffling - time series!)
     train_returns = log_returns.iloc[:train_size]
@@ -367,4 +367,3 @@ def run_backtest(
         signal_quality = "low"
 
     return best_model, best_test_mape, signal_quality, test_metrics, val_metrics
-

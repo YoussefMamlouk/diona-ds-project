@@ -12,6 +12,8 @@ from .models import (
     forecast_with_xgb,
     train_ar1,
     forecast_ar1,
+    train_linear_cv,
+    forecast_with_linear,
 )
 from .backtests import run_backtest
 from .volatility import backtest_garch_volatility
@@ -99,9 +101,6 @@ def generate_forecast(
     if horizon_settings["interval"] == "1d":
         start = prices.index[-1] + pd.offsets.BDay()
         freq = "B"
-    elif horizon_settings["interval"] == "1wk":
-        start = prices.index[-1] + pd.offsets.Week(weekday=4)
-        freq = "W-FRI"
     elif horizon_settings["interval"] == "1mo":
         start = prices.index[-1] + pd.offsets.MonthBegin(1)
         freq = "MS"
@@ -141,6 +140,27 @@ def generate_forecast(
             last = exog_df.iloc[-1].values
             exog_future = np.vstack([last] * forecast_steps)
         forecast_returns = forecast_from_arima(arima_full, model_type, forecast_steps, exog_future)
+    elif best_model_name in ("ridge", "lasso", "elasticnet"):
+        try:
+            np.random.seed(42)
+            linear_model = train_linear_cv(
+                log_returns,
+                exog_df if has_exog else None,
+                model_kind=best_model_name,
+            )
+            if linear_model is not None:
+                forecast_returns = forecast_with_linear(
+                    log_returns,
+                    exog_df if has_exog else None,
+                    forecast_steps,
+                    model=linear_model,
+                )
+                if forecast_returns is None:
+                    forecast_returns = np.full(forecast_steps, drift_full)
+            else:
+                forecast_returns = np.full(forecast_steps, drift_full)
+        except Exception:
+            forecast_returns = np.full(forecast_steps, drift_full)
     elif best_model_name == "random_walk" or best_model_name == "drift":
         # Deterministic expected return forecast (no artificial wiggles).
         # We will simulate day-to-day volatility only for plotting (see plot_forecast).
@@ -167,7 +187,7 @@ def generate_forecast(
     mode = horizon_settings.get("mode", "D")
     is_long_horizon = (
         horizon_days >= 180 or  # 6+ months in any mode (6 months = 126 days, but we want to include it)
-        forecast_steps > 20 or  # Long daily/weekly forecasts
+        forecast_steps > 20 or  # Long daily forecasts
         (mode == "M" and forecast_steps >= 3)  # Monthly: 3 months (3 steps) or longer - AR1/ARIMA can be unreliable
     )
     
@@ -188,19 +208,17 @@ def generate_forecast(
     # Step 7: Estimate future volatility using GARCH(1,1)
     #
     # IMPORTANT:
-    # `log_returns` may be weekly/monthly (because `prices` is resampled for the selected horizon).
+    # `log_returns` may be monthly (because `prices` is resampled for the selected horizon).
     # Fitting GARCH on resampled returns and then annualizing with sqrt(252) will massively inflate
     # volatility (e.g., >200%) and often produces flat multi-step forecasts.
     #
     # To keep units consistent, we always fit GARCH on DAILY log-returns and then aggregate the
-    # predicted daily variance into per-step (daily/weekly/monthly) volatility.
+    # predicted daily variance into per-step (daily/monthly) volatility.
     horizon_days = int(horizon_settings.get("invested_days", forecast_steps))
 
     # Determine "days per step" for aggregation.
     if horizon_settings["interval"] == "1d":
         days_per_step = 1
-    elif horizon_settings["interval"] == "1wk":
-        days_per_step = 5
     elif horizon_settings["interval"] == "1mo":
         days_per_step = 21
     else:
@@ -463,7 +481,7 @@ def generate_forecast(
         # Trim to horizon_days
         daily_var_pct2 = daily_var_pct2[:horizon_days]
 
-    # Aggregate daily variance into each forecast "step" (day/week/month).
+    # Aggregate daily variance into each forecast "step" (day/month).
     # - period_std_decimal is used for Monte Carlo shocks (consistent with step frequency)
     # - sigma_forecast is for plotting/reporting (annualized %)
     period_std_decimal = []
@@ -509,7 +527,7 @@ def generate_forecast(
     num_sims = int(num_sims)
     np.random.seed(42)  # For reproducibility
     
-    # Volatility for MC must match the step frequency of `adjusted_returns` (daily/weekly/monthly).
+    # Volatility for MC must match the step frequency of `adjusted_returns` (daily/monthly).
     sigma_for_mc = period_std_soft_decimal
     
     # Generate random shocks and simulate price paths

@@ -11,7 +11,6 @@ os.environ['NUMEXPR_NUM_THREADS'] = '1'  # NumExpr
 os.environ['VECLIB_MAXIMUM_THREADS'] = '1'  # macOS Accelerate framework
 
 import numpy as np
-import yfinance as yf
 import argparse
 import pathlib
 
@@ -28,17 +27,6 @@ from src.evaluation import (
 from src.eda import generate_eda_report
 
 warnings.filterwarnings("ignore")
-try:
-    # Setting the timezone cache location must be done before the cache is
-    # initialized. Tests or other imports may have already created the
-    # cache, which raises an AssertionError; guard against that so importing
-    # this module is side-effect free for tests.
-    yf.set_tz_cache_location("~/.cache/yfinance")
-except AssertionError:
-    # Cache already initialized; ignore to keep import-time idempotency.
-    pass
-except Exception as e:
-    warnings.warn(f"Could not set yfinance tz cache location: {e}")
 
 
 # Hardcoded ticker for reproducibility
@@ -203,10 +191,8 @@ def main():
     parser.add_argument("--save", dest="save_plot", help="Save generated plot to results/", action="store_true")
     parser.add_argument("--n-scenarios", dest="n_scenarios", help="Number of Monte Carlo scenarios (default 500)", type=int, default=500)
     parser.add_argument("--no-ml", dest="no_ml", help="Disable ML models (XGBoost) and run only statistical models", action="store_true")
+    parser.add_argument("--cache-only", dest="cache_only", help="Use cached data only (no downloads)", action="store_true")
     args, _ = parser.parse_known_args()
-
-    # Always run in cache-only mode for reproducibility
-    args.cache_only = True
 
     standard_horizons = [
         (10.0, "day", "10 days"),
@@ -218,7 +204,10 @@ def main():
     horizon_labels = ", ".join([h[2] for h in standard_horizons])
 
     print("Running default full pipeline (EDA + all-horizons forecasts).")
-    print("Reproducibility mode: using cached Yahoo Finance CSV only (no downloads).")
+    if args.cache_only:
+        print("Reproducibility mode: using cached Yahoo Finance CSV only (no downloads).")
+    else:
+        print("Cache-first mode: uses cached CSV when available and downloads once if missing.")
     print(f"Forecast horizons: {horizon_labels}\n")
 
     if args.save_plot:

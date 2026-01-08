@@ -82,7 +82,7 @@
 
 \begin{abstract}
 \noindent
-This project examines the predictive performance of standard econometric models and machine learning methods for equity returns and volatility within a fully reproducible forecasting pipeline. Using Tesla (TSLA) as a high volatility case study, we benchmark a random walk against AR(1), automatically selected ARIMA models, regularized linear regressions and XGBoost over horizons ranging from 10 trading days to one year. To prevent look ahead bias, model selection is based exclusively on a validation window. The selected model is then refit on the combined train+validation sample and evaluated out of sample using price level errors. The main empirical finding is that return forecasts remain weak: once realistic time series validation is enforced, gains over the random walk are not stable. However, volatility is substantially more predictable. A GJR-GARCH(1,1) specification with Student-$t$ innovations consistently improves on an EWMA baseline and yields credible uncertainty bands for Monte Carlo price simulations. Overall, the pipeline proves more reliable as a risk and uncertainty tool than as a point return forecasting engine.
+This project studies how far standard econometric models and machine learning methods can go in forecasting equity returns and volatility within a fully reproducible pipeline. Using Tesla (TSLA) as a high-volatility case, we benchmark a random walk against AR(1), automatically selected ARIMA models, regularized linear regressions, and XGBoost over horizons ranging from 10 trading days to one year. To prevent look-ahead bias, model choice is based exclusively on a validation window; the selected model is then refit on the combined train+validation sample and evaluated out of sample using price-level errors. The main empirical result is that return forecasts remain weak: once realistic time-series validation is enforced, gains over the random walk are not stable. Volatility, however, is substantially more predictable. A GJR-GARCH(1,1) specification with Student-$t$ innovations consistently improves on an EWMA baseline and yields credible uncertainty bands for Monte Carlo price simulations. Overall, the pipeline is more reliable as a risk and uncertainty tool than as a point return forecasting engine.
 \end{abstract}
 
 \vspace{0.5cm}
@@ -131,10 +131,10 @@ This project examines the predictive performance of standard econometric models 
 \label{subsec:data}
 
 \paragraph{Source and collection.}
-We use Tesla, Inc. (TSLA) as a representative high volatility equity. Historical market data are collected from Yahoo Finance via \texttt{yfinance} and stored locally as a cached CSV snapshot (\texttt{data/raw/yfinance\_cache\_TSLA.csv}). The initial prototype supported arbitrary tickers via live API calls, but the final pipeline uses a fixed local cache to ensure reproducibility and avoid API rate limit interruptions.
+We use Tesla, Inc. (TSLA) as a representative high volatility equity. Historical market data are collected from Yahoo Finance via \texttt{yfinance} and stored locally as a cached CSV snapshot (\texttt{data/raw/yfinance\_cache\_TSLA.csv}). The initial prototype supported arbitrary tickers via live API calls, but the final pipeline relies on a fixed local cache for reproducibility; a download is only triggered if the cache is missing.
 
 \paragraph{Sample size and characteristics.}
-The cached dataset contains 1,256 daily observations spanning 2020-12-14 to 2025-12-12, with standard OHLCV fields. The EDA summary reports zero missing values and zero zero volume days in the cached sample.
+The cached dataset contains 1,256 daily observations spanning 2020-12-14 to 2025-12-12, with standard OHLCV fields. The EDA summary reports no missing values and no zero volume days in the cached sample. The annualized volatility is around 60\% on a simple-return basis, and the return distribution exhibits heavy tails.
 
 \paragraph{Target variables.}
 Let $P_t$ denote the adjusted close price at date $t$. Daily log returns are computed as
@@ -145,7 +145,7 @@ Let $P_t$ denote the adjusted close price at date $t$. Daily log returns are com
 Return forecasting targets $r_t$ at each horizon, computed on resampled price series (monthly: last price in the month with month start index). Volatility forecasting is modeled separately: the GARCH component targets conditional variance of daily returns and evaluation uses realized variance/volatility derived from daily returns.
 
 \paragraph{Summary statistics.}
-Table~\ref{tab:data-summary} summarizes key properties from the cached sample (computed on daily log returns).
+Table~\ref{tab:data-summary} summarizes key properties from the cached sample (computed on daily simple returns for interpretability, while modeling uses log returns as defined above).
 
 \begin{table}[H]
 \centering
@@ -193,7 +193,7 @@ Horizon & Unit & Steps & Trading days per step \\
 
 \subsubsection{Feature construction}
 All predictors are computed causally (using information available at time $t$):
-\begin{itemize}[itemsep=0.35\baselineskip, topsep=0.2\baselineskip]
+\begin{itemize}[itemsep=0.55\baselineskip, topsep=0.25\baselineskip]
     \item Lagged returns $\{r_{t-1},\dots,r_{t-5}\}$ for ML and regularized regressions.
     \item Normalized volume (z-score): proxy for liquidity and trading intensity.
     \item Momentum: rolling mean of simple returns over 5 and 10 days, capturing short term trend effects.
@@ -218,6 +218,7 @@ For daily horizons this is implemented as ARIMA$(1,0,0)$, with optional exogenou
 \paragraph{Regularized linear models.} Ridge, Lasso and Elastic Net regressions are included to counteract low signal to noise ratios in returns. Models are trained on lagged returns and exogenous features with time series cross validation to select regularization strength.
 
 \paragraph{XGBoost.} Gradient boosted trees are trained with a small deterministic grid and time series CV when enough data are available. Forecasting is iterative: one step predictions are fed back as lagged inputs for multi step horizons.
+\noindent Because volatility forecasting already has strong econometric tools, we focused the ML effort on return prediction to test whether nonlinear methods could improve accuracy beyond linear baselines.
 
 \subsubsection{Volatility forecasting}
 Volatility is modeled separately from returns. We fit a GJR-GARCH$(1,1)$ model with Student-$t$ innovations when possible, falling back to a symmetric GARCH$(1,1)$ with Gaussian errors if optimization fails. The Student-$t$ choice is motivated by the heavy tails observed in the return distribution.
@@ -245,7 +246,7 @@ Forecasts are evaluated on price levels by compounding predicted log returns:
 \begin{equation}
 \hat P_{t+h} = P_t \exp\left(\sum_{j=1}^{h}\hat r_{t+j|t}\right).
 \end{equation}
-We report RMSE and MAE on prices because investment decisions and baseline comparisons are naturally framed in price levels rather than raw returns. MAPE is provided in Appendix~\ref{app:figures} for interpretability. For AR(1) and XGBoost, results with MAPE at or above 100\% are dropped to avoid extreme failures dominating selection. Volatility backtests additionally report the QLIKE loss on variance forecasts, computed as
+We report RMSE and MAE on prices because investment decisions and baseline comparisons are naturally framed in price levels rather than raw returns. MAPE is provided in Appendix~\ref{app:figures} for interpretability. For AR(1) and XGBoost, results with MAPE at or above 100\% are dropped to avoid extreme failures dominating selection. The CLI also prints a qualitative signal quality label based on test MAPE thresholds as a user facing summary only; it is not used for selection. Volatility backtests additionally report the QLIKE loss on variance forecasts, computed as
 \begin{equation}
 \mathrm{QLIKE}(v,\hat v) = \log(\hat v) + \frac{v}{\hat v},
 \end{equation}
@@ -265,7 +266,7 @@ For long horizons, the point forecast for AR(1) and ARIMA is replaced by the his
 \label{sec:implementation}
 
 \paragraph{Languages and libraries.}
-The project is implemented in Python 3.10.0 using \texttt{pandas}/\texttt{numpy} (data handling), \texttt{statsmodels} and \texttt{pmdarima} (AR/ARIMA), \texttt{scikit learn} (regularized models and time series CV), \texttt{xgboost} (ML model) and \texttt{arch} (GARCH volatility).
+The project is implemented in Python 3.10.0 using \texttt{pandas}/\texttt{numpy} (data handling), \texttt{statsmodels} and \texttt{pmdarima} (AR/ARIMA), \texttt{scikit-learn} (regularized models and time series CV), \texttt{xgboost} (ML model) and \texttt{arch} (GARCH volatility). Development was done in Visual Studio Code.
 
 \paragraph{System architecture.}
 The pipeline is modular and CLI driven. \texttt{main.py} orchestrates EDA, backtests, forecasting, plotting and result export. Core modules include:
@@ -274,12 +275,12 @@ The pipeline is modular and CLI driven. \texttt{main.py} orchestrates EDA, backt
     \item \texttt{models.py}: AR(1), ARIMA helpers, regularized regressions, XGBoost training and forecasting.
     \item \texttt{backtests.py}: train/validation/test backtest logic and metric computation.
     \item \texttt{volatility.py}: GARCH and EWMA volatility backtests.
-    \item \texttt{evaluation.py}: end to end forecasting and Monte Carlo simulation.
+    \item \texttt{evaluation.py}: end-to-end forecasting and Monte Carlo simulation.
     \item \texttt{plots.py}, \texttt{results.py}: visualization and CSV artifact export.
 \end{itemize}
 
 \paragraph{Reproducibility controls.}
-Determinism is enforced through fixed seeds, single thread execution (OMP/BLAS environment variables are set to 1) and cached data. Running \texttt{python main.py} triggers the deterministic pipeline (EDA + all horizons) using the fixed TSLA snapshot in \texttt{data/raw/}.
+Determinism is enforced through fixed seeds, single thread execution (OMP/BLAS environment variables are set to 1) and cached data. Running \texttt{python main.py} triggers the deterministic pipeline (EDA + all horizons) using the cached TSLA snapshot in \texttt{data/raw/}; a download occurs only if the cache is missing.
 
 \begin{lstlisting}[caption={Reproducibility controls (excerpt).}]
 # main.py (top-level setup)
@@ -291,7 +292,6 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 
 np.random.seed(42)
-args.cache_only = True
 \end{lstlisting}
 
 \section{Maintenance and Updating the Codebase}
@@ -404,14 +404,14 @@ Forecast and volatility plots are generated automatically under \texttt{results/
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\textwidth,height=0.28\textheight,keepaspectratio]{../results/forecast_TSLA_1_year_20260106T182007Z.png}
+\includegraphics[width=0.85\textwidth,height=0.28\textheight,keepaspectratio]{../results/forecast_TSLA_1_year_20260108T105441Z.png}
 \caption{One year price forecast with Monte Carlo bands (TSLA).}
 \label{fig:forecast}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\textwidth,height=0.28\textheight,keepaspectratio]{../results/volatility_forecast_TSLA_1_year_20260106T182007Z.png}
+\includegraphics[width=0.85\textwidth,height=0.28\textheight,keepaspectratio]{../results/volatility_forecast_TSLA_1_year_20260108T105441Z.png}
 \caption{One year volatility forecast (annualized, TSLA).}
 \label{fig:vol}
 \end{figure}
@@ -503,21 +503,21 @@ Supplementary figures and diagnostics can be placed here.
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\textwidth]{../results/eda_returns_distribution_TSLA_20260106T181947Z.png}
+\includegraphics[width=0.85\textwidth]{../results/eda_returns_distribution_TSLA_20260108T105421Z.png}
 \caption{EDA: return distribution and normality diagnostics (TSLA).}
 \label{fig:eda-returns}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\textwidth]{../results/eda_volatility_TSLA_20260106T181947Z.png}
+\includegraphics[width=0.85\textwidth]{../results/eda_volatility_TSLA_20260108T105422Z.png}
 \caption{EDA: 21 day rolling volatility showing clustering (TSLA).}
 \label{fig:eda-vol}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.7\textwidth]{../results/forecast_TSLA_3_months_20260106T181959Z.png}
+\includegraphics[width=0.7\textwidth]{../results/forecast_TSLA_3_months_20260108T105434Z.png}
 \caption{Example forecast gap at the horizon boundary (3 month forecast).}
 \label{fig:forecast-gap}
 \end{figure}
